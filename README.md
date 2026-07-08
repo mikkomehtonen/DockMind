@@ -49,6 +49,7 @@ make lint
 | POST | `/restart` | Stop then start the complete system |
 | GET | `/health` | DockMind daemon health (does not indicate GPU readiness) |
 | GET | `/docs` | Interactive Swagger UI for exploring the API |
+| GET | `/` | Responsive web UI for monitoring and controlling DockMind |
 
 Full request-response details and state-machine transitions are in [docs/DockMind_MVP_Specification.md](docs/DockMind_MVP_Specification.md).
 

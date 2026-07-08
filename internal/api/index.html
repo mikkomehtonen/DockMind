@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DockMind</title>
+  <style>
+    :root {
+      --bg: oklch(0.10 0 0);
+      --surface: oklch(0.155 0.004 150);
+      --surface-2: oklch(0.205 0.005 150);
+      --ink: oklch(0.93 0.006 150);
+      --muted: oklch(0.62 0.012 150);
+      --border: oklch(0.24 0.005 150);
+      --primary: oklch(0.62 0.145 150);
+      --primary-hover: oklch(0.66 0.155 150);
+      --danger: oklch(0.62 0.18 25);
+      --danger-hover: oklch(0.66 0.19 25);
+      --busy: oklch(0.78 0.15 70);
+      --neutral: oklch(0.62 0.012 150);
+      --radius: 10px;
+      --fs-sm: 0.8125rem;
+      --fs-base: 0.9375rem;
+      --fs-md: 1rem;
+      --fs-lg: 1.25rem;
+      --fs-state: 1.5rem;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: var(--fs-base);
+      line-height: 1.5;
+      color: var(--ink);
+      background: var(--bg);
+      min-height: 100vh;
+    }
+
+    .app {
+      max-width: 30rem;
+      margin: 0 auto;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .app__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .app__title {
+      margin: 0;
+      font-size: var(--fs-lg);
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .app__connection {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: var(--fs-sm);
+      color: var(--muted);
+    }
+
+    .conn__dot,
+    .state__dot,
+    .component__dot {
+      display: inline-block;
+      width: 0.625rem;
+      height: 0.625rem;
+      border-radius: 50%;
+      background: var(--neutral);
+      flex-shrink: 0;
+      transition: background-color 150ms ease;
+    }
+
+    .conn__dot.is-live,
+    .state__dot.is-primary,
+    .component__dot.is-on {
+      background: var(--primary);
+    }
+
+    .conn__dot.is-busy,
+    .state__dot.is-busy {
+      background: var(--busy);
+    }
+
+    .state__dot.is-danger {
+      background: var(--danger);
+    }
+
+    .state__dot.is-neutral {
+      background: var(--neutral);
+    }
+
+    .state {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .state__label {
+      font-size: var(--fs-sm);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .state__badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.625rem;
+      align-self: flex-start;
+      padding: 0.5rem 0.875rem;
+      border-radius: 999px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      transition: background-color 150ms ease, border-color 150ms ease;
+    }
+
+    .state__name {
+      font-size: var(--fs-state);
+      font-weight: 700;
+    }
+
+    .state__feedback {
+      margin: 0;
+      font-size: var(--fs-sm);
+      color: var(--muted);
+      min-height: 1.25rem;
+    }
+
+    .state__feedback[hidden] {
+      display: none;
+    }
+
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .btn {
+      appearance: none;
+      border: none;
+      border-radius: var(--radius);
+      padding: 0.875rem 1rem;
+      font-size: var(--fs-md);
+      font-weight: 700;
+      color: #fff;
+      cursor: pointer;
+      transition: background-color 150ms ease, transform 150ms ease, opacity 150ms ease;
+    }
+
+    .btn:focus-visible {
+      outline: 2px solid var(--ink);
+      outline-offset: 2px;
+    }
+
+    .btn:active:not(:disabled) {
+      transform: translateY(1px);
+    }
+
+    .btn--primary {
+      background: var(--primary);
+    }
+
+    .btn--primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+    }
+
+    .btn--danger {
+      background: var(--danger);
+    }
+
+    .btn--danger:hover:not(:disabled) {
+      background: var(--danger-hover);
+    }
+
+    .btn--ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--ink);
+    }
+
+    .btn--ghost:hover:not(:disabled) {
+      background: var(--surface-2);
+    }
+
+    .btn:disabled {
+      background: var(--surface);
+      color: var(--muted);
+      opacity: 0.7;
+      cursor: not-allowed;
+      border-color: var(--border);
+    }
+
+    .components {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .components__heading {
+      margin: 0 0 0.25rem;
+      font-size: var(--fs-lg);
+      font-weight: 600;
+    }
+
+    .component {
+      display: flex;
+      align-items: center;
+      gap: 0.625rem;
+      padding: 0.625rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .component:last-child {
+      border-bottom: none;
+    }
+
+    .component__label {
+      flex: 1;
+      color: var(--ink);
+    }
+
+    .component__value {
+      color: var(--muted);
+      font-size: var(--fs-sm);
+    }
+
+    .error {
+      background: var(--surface);
+      border: 1px solid var(--danger);
+      border-radius: var(--radius);
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .error[hidden] {
+      display: none;
+    }
+
+    .error__label {
+      margin: 0;
+      font-size: var(--fs-sm);
+      color: var(--danger);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .error__message {
+      margin: 0;
+      font-size: var(--fs-base);
+      color: var(--ink);
+      word-break: break-word;
+    }
+
+    .app__footer {
+      text-align: center;
+      font-size: var(--fs-sm);
+      color: var(--muted);
+    }
+
+    .app__footer a {
+      color: var(--primary);
+      text-decoration: none;
+    }
+
+    .app__footer a:hover {
+      text-decoration: underline;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.45; }
+    }
+
+    .state__dot.is-busy {
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .state__dot.is-busy {
+        animation: none;
+      }
+
+      .conn__dot,
+      .state__dot,
+      .component__dot,
+      .state__badge,
+      .btn {
+        transition: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="app__header">
+      <h1 class="app__title">DockMind</h1>
+      <p class="app__connection" id="connection">
+        <span class="conn__dot" id="conn-dot"></span>
+        <span id="conn-text">Connecting…</span>
+      </p>
+    </header>
+
+    <section class="state" aria-live="polite">
+      <span class="state__label">System state</span>
+      <div class="state__badge" id="state-badge">
+        <span class="state__dot" id="state-dot"></span>
+        <span class="state__name" id="state-name">Loading…</span>
+      </div>
+      <p class="state__feedback" id="feedback" hidden></p>
+    </section>
+
+    <section class="actions">
+      <button class="btn btn--primary" id="btn-on" data-action="on" disabled>Power On</button>
+      <button class="btn btn--danger" id="btn-off" data-action="off" disabled>Power Off</button>
+      <button class="btn btn--ghost" id="btn-restart" data-action="restart" disabled>Restart</button>
+    </section>
+
+    <section class="components">
+      <h2 class="components__heading">Components</h2>
+      <div class="component">
+        <span class="component__dot" id="gpu-dot"></span>
+        <span class="component__label">GPU</span>
+        <span class="component__value" id="gpu-value">—</span>
+      </div>
+      <div class="component">
+        <span class="component__dot" id="shelly-dot"></span>
+        <span class="component__label">Shelly Plug</span>
+        <span class="component__value" id="shelly-value">—</span>
+      </div>
+      <div class="component">
+        <span class="component__dot" id="swap-dot"></span>
+        <span class="component__label">llama-swap</span>
+        <span class="component__value" id="swap-value">—</span>
+      </div>
+      <div class="component">
+        <span class="component__dot" id="health-dot"></span>
+        <span class="component__label">Health check</span>
+        <span class="component__value" id="health-value">—</span>
+      </div>
+    </section>
+
+    <section class="error" id="error-banner" hidden>
+      <p class="error__label">Last error</p>
+      <p class="error__message" id="error-message"></p>
+    </section>
+
+    <footer class="app__footer">
+      <a href="/docs">API Docs</a>
+    </footer>
+  </main>
+  <script>
+    const POLL_MS = 1000;
+    const FETCH_TIMEOUT_MS = 5000;
+    const FEEDBACK_CLEAR_MS = 2500;
+
+    const STATE_COLORS = {
+      Off: "neutral",
+      Starting: "busy",
+      Ready: "primary",
+      ShuttingDown: "busy",
+      Error: "danger",
+    };
+
+    const ENABLED = {
+      Off:         { on: true,  off: false, restart: true  },
+      Starting:    { on: false, off: false, restart: false },
+      Ready:       { on: false, off: true,  restart: true  },
+      ShuttingDown:{ on: false, off: false, restart: false },
+      Error:       { on: false, off: true,  restart: false },
+    };
+
+    const els = {
+      connDot: document.getElementById("conn-dot"),
+      connText: document.getElementById("conn-text"),
+      stateBadge: document.getElementById("state-badge"),
+      stateDot: document.getElementById("state-dot"),
+      stateName: document.getElementById("state-name"),
+      feedback: document.getElementById("feedback"),
+      btnOn: document.getElementById("btn-on"),
+      btnOff: document.getElementById("btn-off"),
+      btnRestart: document.getElementById("btn-restart"),
+      gpuDot: document.getElementById("gpu-dot"),
+      gpuValue: document.getElementById("gpu-value"),
+      shellyDot: document.getElementById("shelly-dot"),
+      shellyValue: document.getElementById("shelly-value"),
+      swapDot: document.getElementById("swap-dot"),
+      swapValue: document.getElementById("swap-value"),
+      healthDot: document.getElementById("health-dot"),
+      healthValue: document.getElementById("health-value"),
+      errorBanner: document.getElementById("error-banner"),
+      errorMessage: document.getElementById("error-message"),
+    };
+
+    let pending = false;
+    let feedbackTimer = null;
+
+    function setConnected(connected) {
+      if (connected) {
+        els.connDot.className = "conn__dot is-live";
+        els.connText.textContent = "Live";
+      } else {
+        els.connDot.className = "conn__dot is-busy";
+        els.connText.textContent = "Disconnected — retrying";
+      }
+    }
+
+    function setStateColor(color) {
+      els.stateDot.className = "state__dot is-" + color;
+    }
+
+    function setComponentDot(el, on) {
+      el.className = "component__dot" + (on ? " is-on" : "");
+    }
+
+    function disableAllButtons() {
+      els.btnOn.disabled = true;
+      els.btnOff.disabled = true;
+      els.btnRestart.disabled = true;
+    }
+
+    function showFeedback(text) {
+      if (feedbackTimer) {
+        clearTimeout(feedbackTimer);
+        feedbackTimer = null;
+      }
+      if (!text) {
+        els.feedback.hidden = true;
+        els.feedback.textContent = "";
+        return;
+      }
+      els.feedback.hidden = false;
+      els.feedback.textContent = text;
+      feedbackTimer = setTimeout(() => {
+        els.feedback.hidden = true;
+        els.feedback.textContent = "";
+        feedbackTimer = null;
+      }, FEEDBACK_CLEAR_MS);
+    }
+
+    function render(data) {
+      const color = STATE_COLORS[data.state] || "neutral";
+      setStateColor(color);
+      els.stateName.textContent = data.state || "Unknown";
+
+      if (data.gpuPresent && data.gpuName) {
+        els.gpuValue.textContent = data.gpuName;
+      } else if (data.gpuPresent) {
+        els.gpuValue.textContent = "Detected";
+      } else {
+        els.gpuValue.textContent = "Not detected";
+      }
+      setComponentDot(els.gpuDot, data.gpuPresent);
+
+      els.shellyValue.textContent = data.shellyOn ? "On" : "Off";
+      setComponentDot(els.shellyDot, data.shellyOn);
+
+      els.swapValue.textContent = data.llamaSwapRunning ? "Running" : "Stopped";
+      setComponentDot(els.swapDot, data.llamaSwapRunning);
+
+      els.healthValue.textContent = data.llamaSwapHealthy ? "Healthy" : "Unhealthy";
+      setComponentDot(els.healthDot, data.llamaSwapHealthy);
+
+      if (data.lastError) {
+        els.errorBanner.hidden = false;
+        els.errorMessage.textContent = data.lastError;
+      } else {
+        els.errorBanner.hidden = true;
+        els.errorMessage.textContent = "";
+      }
+
+      const enabled = ENABLED[data.state] || { on: false, off: false, restart: false };
+      els.btnOn.disabled = !enabled.on;
+      els.btnOff.disabled = !enabled.off;
+      els.btnRestart.disabled = !enabled.restart;
+
+      showFeedback("");
+    }
+
+    async function fetchStatus() {
+      if (pending) return;
+      pending = true;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+      try {
+        const res = await fetch("/status", { signal: ctrl.signal });
+        if (!res.ok) throw new Error("status " + res.status);
+        const data = await res.json();
+        render(data);
+        setConnected(true);
+      } catch (e) {
+        setConnected(false);
+      } finally {
+        clearTimeout(timer);
+        pending = false;
+      }
+    }
+
+    const ACTION_ENDPOINTS = {
+      on: "/power/on",
+      off: "/power/off",
+      restart: "/restart",
+    };
+
+    const ACTION_LABELS = {
+      on: "Powering on",
+      off: "Powering off",
+      restart: "Restarting",
+    };
+
+    async function doAction(endpoint, label) {
+      disableAllButtons();
+      showFeedback("…");
+      try {
+        const res = await fetch(endpoint, { method: "POST" });
+        if (res.status === 202)      showFeedback(label + "…");
+        else if (res.status === 200) showFeedback("Already in target state");
+        else if (res.status === 409) showFeedback("Not allowed right now");
+        else                         showFeedback("Unexpected response");
+      } catch (e) {
+        showFeedback("Request failed");
+      }
+    }
+
+    [els.btnOn, els.btnOff, els.btnRestart].forEach(btn => {
+      btn.addEventListener("click", () => {
+        const action = btn.dataset.action;
+        doAction(ACTION_ENDPOINTS[action], ACTION_LABELS[action]);
+      });
+    });
+
+    setInterval(fetchStatus, POLL_MS);
+    fetchStatus();
+  </script>
+</body>
+</html>

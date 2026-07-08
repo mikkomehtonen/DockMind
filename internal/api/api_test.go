@@ -268,3 +268,101 @@ func TestSwaggerRoutes(t *testing.T) {
 	})
 
 }
+
+func TestWebUIRoutes(t *testing.T) {
+	server := NewServer(&fakeStateMachine{}, nil)
+
+	t.Run("GET /", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		ct := rec.Header().Get("Content-Type")
+		if !strings.Contains(ct, "text/html") {
+			t.Fatalf("expected Content-Type to contain text/html, got %q", ct)
+		}
+		body := rec.Body.String()
+		for _, want := range []string{
+			"DockMind",
+			"/status",
+			"/power/on",
+			"/power/off",
+			"/restart",
+			"/docs",
+			"fetch",
+			"setInterval",
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("expected body to contain %q, got %q", want, body)
+			}
+		}
+		if strings.Contains(body, "https://") {
+			t.Fatalf("expected body to contain no https:// URLs")
+		}
+		if strings.Contains(body, "http://") {
+			t.Fatalf("expected body to contain no http:// URLs")
+		}
+	})
+
+	t.Run("POST / wrong method", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, rec.Code)
+		}
+	})
+
+	t.Run("GET /foo unknown path", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/foo", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+		}
+	})
+
+	t.Run("regression GET /status", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/status", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `"state"`) {
+			t.Fatalf("expected body to contain \"state\", got %q", rec.Body.String())
+		}
+	})
+
+	t.Run("regression GET /health", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		if rec.Body.String() != "" {
+			t.Fatalf("expected empty body, got %q", rec.Body.String())
+		}
+	})
+
+	t.Run("regression GET /docs", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/docs", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "swagger-ui") {
+			t.Fatalf("expected body to contain swagger-ui, got %q", rec.Body.String())
+		}
+	})
+}

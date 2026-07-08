@@ -1,0 +1,22 @@
+package dockmind_test
+
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+func TestProductDoc(t *testing.T) {
+	data, err := os.ReadFile("docs/product.md")
+	if err != nil {
+		t.Fatalf("failed to read docs/product.md: %v", err)
+	}
+	body := string(data)
+
+	if !strings.Contains(body, "004-web-ui") {
+		t.Error("docs/product.md Features list does not reference the 004-web-ui story")
+	}
+	if strings.Contains(body, "Web UI, Prometheus metrics, or request queuing during startup") {
+		t.Error("docs/product.md still lists Web UI as a non-goal")
+	}
+}

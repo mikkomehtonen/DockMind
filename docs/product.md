@@ -17,6 +17,7 @@ orchestrates hardware and containers — it does not proxy inference requests.
 - **Health Monitoring** — check llama-swap health through its `/v1/models` REST endpoint ([001-mvp-core](../stories/001-mvp-core/story.md))
 - **README** — concise project overview with quick start, API summary, and links to detailed docs ([002-add-readme](../stories/002-add-readme/story.md))
 - **Swagger UI** — explore the REST API interactively via Swagger UI served at `/docs`, backed by an embedded OpenAPI 3.0 spec at `/openapi.json` ([003-add-swagger-ui](../stories/003-add-swagger-ui/story.md))
+- **Web UI** — responsive mobile-first control panel served at `/`, polling `/status` once per second, with power on/off and restart controls ([004-web-ui](../stories/004-web-ui/story.md))
 
 ## Non-Goals
 
@@ -27,7 +28,7 @@ orchestrates hardware and containers — it does not proxy inference requests.
 - Automatically power down after idle.
 - Support multiple GPUs or multiple inference servers.
 - Background polling or push updates (WebSocket/SSE). Status is checked live only on request.
-- Web UI, Prometheus metrics, or request queuing during startup.
+- Prometheus metrics, or request queuing during startup.
 
 ## Known Limitations
 

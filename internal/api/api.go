@@ -15,6 +15,9 @@ var openapiSpec []byte
 //go:embed docs.html
 var docsHTML []byte
 
+//go:embed index.html
+var indexHTML []byte
+
 type StateMachine interface {
 	Status() state.StatusResponse
 	PowerOn() state.PowerResult
@@ -46,6 +49,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /docs", s.handleDocs)
 	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
+	mux.HandleFunc("GET /{$}", s.handleIndex)
 	return mux
 }
 
@@ -97,4 +101,10 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(openapiSpec)
+}
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write(indexHTML)
 }
