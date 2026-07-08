@@ -1,0 +1,15 @@
+server:
+  address: ":8080"
+shelly:
+  address: 192.168.1.50
+  channel: 0
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+gpu:
+  pollInterval: 1s
+startup:
+  timeout: 60s
+shutdown:
+  timeout: 30s

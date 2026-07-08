@@ -1,0 +1,4 @@
+/dockmind
+/cmd/dockmind/dockmind
+*.exe
+.opencode/
