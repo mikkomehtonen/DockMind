@@ -1,12 +1,19 @@
 package api
 
 import (
+	_ "embed"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/dockmind/dockmind/internal/state"
 )
+
+//go:embed openapi.json
+var openapiSpec []byte
+
+//go:embed docs.html
+var docsHTML []byte
 
 type StateMachine interface {
 	Status() state.StatusResponse
@@ -37,6 +44,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /power/off", s.handlePowerOff)
 	mux.HandleFunc("POST /restart", s.handleRestart)
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /docs", s.handleDocs)
+	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
 	return mux
 }
 
@@ -76,4 +85,16 @@ func (s *Server) handlePowerResult(w http.ResponseWriter, result state.PowerResu
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleDocs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write(docsHTML)
+}
+
+func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(openapiSpec)
 }

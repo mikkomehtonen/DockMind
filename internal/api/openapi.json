@@ -1,0 +1,122 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "DockMind API",
+    "version": "1.0.0",
+    "description": "DockMind is a lightweight daemon that manages the lifecycle of an AI inference server running on an external GPU."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "paths": {
+    "/status": {
+      "get": {
+        "summary": "Get current system state and component health",
+        "responses": {
+          "200": {
+            "description": "Current system state and component health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/power/on": {
+      "post": {
+        "summary": "Power on the eGPU and start llama-swap",
+        "responses": {
+          "202": {
+            "description": "Transition initiated"
+          },
+          "200": {
+            "description": "Already in target state"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/power/off": {
+      "post": {
+        "summary": "Stop llama-swap and power off the eGPU",
+        "responses": {
+          "202": {
+            "description": "Transition initiated"
+          },
+          "200": {
+            "description": "Already in target state"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/restart": {
+      "post": {
+        "summary": "Stop then start the complete system",
+        "responses": {
+          "202": {
+            "description": "Transition initiated"
+          },
+          "200": {
+            "description": "Already in target state"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "DockMind daemon health (not GPU readiness)",
+        "responses": {
+          "200": {
+            "description": "Daemon is healthy"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "StatusResponse": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": ["Off", "Starting", "Ready", "ShuttingDown", "Error"]
+          },
+          "gpuPresent": {
+            "type": "boolean"
+          },
+          "gpuName": {
+            "type": "string"
+          },
+          "shellyOn": {
+            "type": "boolean"
+          },
+          "llamaSwapRunning": {
+            "type": "boolean"
+          },
+          "llamaSwapHealthy": {
+            "type": "boolean"
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      }
+    }
+  }
+}

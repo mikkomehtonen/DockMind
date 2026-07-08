@@ -48,6 +48,7 @@ make lint
 | POST | `/power/off` | Stop `llama-swap` and power off the eGPU |
 | POST | `/restart` | Stop then start the complete system |
 | GET | `/health` | DockMind daemon health (does not indicate GPU readiness) |
+| GET | `/docs` | Interactive Swagger UI for exploring the API |
 
 Full request-response details and state-machine transitions are in [docs/DockMind_MVP_Specification.md](docs/DockMind_MVP_Specification.md).
 

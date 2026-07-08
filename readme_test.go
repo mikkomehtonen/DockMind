@@ -34,6 +34,7 @@ func TestREADME(t *testing.T) {
 		{"documents /power/off route", "/power/off", true},
 		{"documents /restart route", "/restart", true},
 		{"documents /health route", "/health", true},
+		{"documents /docs route", "/docs", true},
 		{"status example includes state field", "state", true},
 		{"status example includes gpuPresent field", "gpuPresent", true},
 		{"status example includes gpuName field", "gpuName", true},

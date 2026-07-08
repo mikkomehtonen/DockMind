@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -150,6 +151,18 @@ func TestRoutes(t *testing.T) {
 			path:       "/power/off",
 			wantStatus: http.StatusMethodNotAllowed,
 		},
+		{
+			name:       "POST /docs wrong method",
+			method:     http.MethodPost,
+			path:       "/docs",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+		{
+			name:       "POST /openapi.json wrong method",
+			method:     http.MethodPost,
+			path:       "/openapi.json",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
 	}
 
 	for _, tc := range cases {
@@ -174,4 +187,84 @@ func TestRoutes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSwaggerRoutes(t *testing.T) {
+	server := NewServer(&fakeStateMachine{}, nil)
+
+	t.Run("GET /docs", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/docs", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		ct := rec.Header().Get("Content-Type")
+		if !strings.Contains(ct, "text/html") {
+			t.Fatalf("expected Content-Type to contain text/html, got %q", ct)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "swagger-ui") {
+			t.Fatalf("expected body to contain swagger-ui, got %q", body)
+		}
+		if !strings.Contains(body, "/openapi.json") {
+			t.Fatalf("expected body to contain /openapi.json, got %q", body)
+		}
+	})
+
+	t.Run("GET /openapi.json", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		ct := rec.Header().Get("Content-Type")
+		if !strings.Contains(ct, "application/json") {
+			t.Fatalf("expected Content-Type to contain application/json, got %q", ct)
+		}
+
+		var spec map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil {
+			t.Fatalf("expected body to parse as JSON: %v", err)
+		}
+		if spec["openapi"] != "3.0.3" {
+			t.Fatalf("expected openapi version 3.0.3, got %v", spec["openapi"])
+		}
+
+		paths, ok := spec["paths"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected paths to be an object")
+		}
+		for _, p := range []string{"/status", "/power/on", "/power/off", "/restart", "/health"} {
+			if _, ok := paths[p]; !ok {
+				t.Fatalf("expected paths to contain %q", p)
+			}
+		}
+
+		components, ok := spec["components"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected components to be an object")
+		}
+		schemas, ok := components["schemas"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected components.schemas to be an object")
+		}
+		statusResponse, ok := schemas["StatusResponse"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected components.schemas.StatusResponse to be an object")
+		}
+		properties, ok := statusResponse["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected components.schemas.StatusResponse.properties to be an object")
+		}
+		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "lastError"} {
+			if _, ok := properties[field]; !ok {
+				t.Fatalf("expected StatusResponse properties to contain %q", field)
+			}
+		}
+	})
+
 }

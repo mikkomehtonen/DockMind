@@ -29,3 +29,9 @@
 **Area**: workflow / git
 **What happened**: Running the acceptance/code reviewers created committed review-report commits on the branch and left the `.opencode/` workspace configuration directory untracked. This makes `git status` show untracked files even though all story-related changes are committed.
 **Takeaway**: Expect reviewer artifacts as branch commits. Do not commit `.opencode/` as part of a feature story; treat it as pre-existing workspace configuration.
+
+## Extend existing table-driven tests instead of adding parallel hand-written cases
+**Date**: 2026-07-08
+**Area**: testing / code review
+**What happened**: Adding Swagger UI routes produced a second `TestSwaggerRoutes` that duplicated `GET /status`, `GET /health`, `GET /foo`, and `POST /docs`/`POST /openapi.json` 405 checks already covered by the existing `TestRoutes` table. The code reviewer flagged this as a blocking simplicity issue because it introduced two patterns for the same concern and the new tests asserted less than the existing ones.
+**Takeaway**: Before writing a new test for an existing route concern, check whether the current table-driven test can absorb the case. Keep one pattern per concern; add separate test functions only for assertions that genuinely do not fit the existing table (e.g., content-type, JSON schema shape, embedded asset parsing).
