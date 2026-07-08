@@ -1,0 +1,16 @@
+[Unit]
+Description=DockMind Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mikko
+WorkingDirectory=/data/dockmind
+EnvironmentFile=/data/dockmind/env
+ExecStart=/usr/local/bin/dockmind --config /data/dockmind/config.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
