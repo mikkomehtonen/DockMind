@@ -15,6 +15,7 @@ orchestrates hardware and containers — it does not proxy inference requests.
 - **REST API** — HTTP endpoints for status, power on/off, restart, and health ([001-mvp-core](../stories/001-mvp-core/story.md))
 - **GPU Monitoring** — detect GPU availability and name via `nvidia-smi` ([001-mvp-core](../stories/001-mvp-core/story.md))
 - **Health Monitoring** — check llama-swap health through its `/v1/models` REST endpoint ([001-mvp-core](../stories/001-mvp-core/story.md))
+- **README** — concise project overview with quick start, API summary, and links to detailed docs ([002-add-readme](../stories/002-add-readme/story.md))
 
 ## Non-Goals
 
