@@ -50,12 +50,16 @@ make lint
 | GET | `/health` | DockMind daemon health (does not indicate GPU readiness) |
 | GET | `/docs` | Interactive Swagger UI for exploring the API |
 | GET | `/` | Responsive web UI for monitoring and controlling DockMind |
+| GET | `/favicon.svg` | SVG favicon for the web UI |
 
 Full request-response details and state-machine transitions are in [docs/DockMind_MVP_Specification.md](docs/DockMind_MVP_Specification.md).
 
 ## Configuration
 
 Optional fields have defaults; see the spec for the complete schema.
+The web UI logo can link to a custom URL by setting the `LOGO_LINK_URL`
+environment variable (e.g. `LOGO_LINK_URL=https://dockmind.example.org`). When
+unset, the logo is a plain image with no link.
 
 ```yaml
 server:

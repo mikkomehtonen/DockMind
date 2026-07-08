@@ -36,6 +36,8 @@ func TestREADME(t *testing.T) {
 		{"documents /health route", "/health", true},
 		{"documents /docs route", "/docs", true},
 		{"documents web UI route", "web UI", true},
+		{"documents favicon route", "/favicon.svg", true},
+		{"documents LOGO_LINK_URL env var", "LOGO_LINK_URL", true},
 		{"status example includes state field", "state", true},
 		{"status example includes gpuPresent field", "gpuPresent", true},
 		{"status example includes gpuName field", "gpuName", true},

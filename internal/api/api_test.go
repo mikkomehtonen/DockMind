@@ -270,7 +270,33 @@ func TestSwaggerRoutes(t *testing.T) {
 }
 
 func TestWebUIRoutes(t *testing.T) {
+	t.Setenv("LOGO_LINK_URL", "")
 	server := NewServer(&fakeStateMachine{}, nil)
+
+	t.Run("GET /favicon.svg", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/favicon.svg", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		ct := rec.Header().Get("Content-Type")
+		if !strings.Contains(ct, "image/svg+xml") {
+			t.Fatalf("expected Content-Type to contain image/svg+xml, got %q", ct)
+		}
+		if !strings.Contains(rec.Body.String(), "<svg") {
+			t.Fatalf("expected body to contain <svg")
+		}
+	})
+
+	t.Run("POST /favicon.svg wrong method", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/favicon.svg", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, rec.Code)
+		}
+	})
 
 	t.Run("GET /", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -296,6 +322,9 @@ func TestWebUIRoutes(t *testing.T) {
 			"setInterval",
 			"llama-swap health",
 			"component__dot.is-danger",
+			"/favicon.svg",
+			"app__logo",
+			`rel="icon"`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("expected body to contain %q, got %q", want, body)
@@ -306,6 +335,9 @@ func TestWebUIRoutes(t *testing.T) {
 		}
 		if strings.Contains(body, "http://") {
 			t.Fatalf("expected body to contain no http:// URLs")
+		}
+		if strings.Contains(body, `class="app__logo-link"`) {
+			t.Fatalf("expected body to NOT contain app__logo-link link element when LOGO_LINK_URL is unset")
 		}
 		if strings.Contains(body, "Health check") {
 			t.Fatalf("expected body to no longer contain the confusing label \"Health check\", got %q", body)
@@ -370,4 +402,23 @@ func TestWebUIRoutes(t *testing.T) {
 			t.Fatalf("expected body to contain swagger-ui, got %q", rec.Body.String())
 		}
 	})
+}
+
+func TestLogoLink(t *testing.T) {
+	t.Setenv("LOGO_LINK_URL", "https://example.com")
+	server := NewServer(&fakeStateMachine{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `class="app__logo-link"`) {
+		t.Fatalf("expected body to contain app__logo-link link element when LOGO_LINK_URL is set")
+	}
+	if !strings.Contains(body, `href="https://example.com"`) {
+		t.Fatalf("expected body to contain href=\"https://example.com\"")
+	}
 }

@@ -18,6 +18,7 @@ orchestrates hardware and containers — it does not proxy inference requests.
 - **README** — concise project overview with quick start, API summary, and links to detailed docs ([002-add-readme](../stories/002-add-readme/story.md))
 - **Swagger UI** — explore the REST API interactively via Swagger UI served at `/docs`, backed by an embedded OpenAPI 3.0 spec at `/openapi.json` ([003-add-swagger-ui](../stories/003-add-swagger-ui/story.md))
 - **Web UI** — responsive mobile-first control panel served at `/`, polling `/status` once per second, with power on/off and restart controls ([004-web-ui](../stories/004-web-ui/story.md))
+- **Favicon & Logo** — SVG favicon served at `/favicon.svg` and displayed as a logo next to the page title in the web UI; the logo links to a configurable URL via the `LOGO_LINK_URL` environment variable ([006-add-favicon-logo](../stories/006-add-favicon-logo/story.md))
 
 ## Non-Goals
 

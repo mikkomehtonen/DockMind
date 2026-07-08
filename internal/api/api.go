@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
+	"html"
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/dockmind/dockmind/internal/state"
 )
@@ -18,6 +21,9 @@ var docsHTML []byte
 //go:embed index.html
 var indexHTML []byte
 
+//go:embed favicon.svg
+var faviconSVG []byte
+
 type StateMachine interface {
 	Status() state.StatusResponse
 	PowerOn() state.PowerResult
@@ -26,18 +32,31 @@ type StateMachine interface {
 }
 
 type Server struct {
-	machine StateMachine
-	logger  *slog.Logger
+	machine           StateMachine
+	logger            *slog.Logger
+	indexHTMLRendered []byte
 }
 
 func NewServer(machine StateMachine, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{
+	s := &Server{
 		machine: machine,
 		logger:  logger,
 	}
+	s.indexHTMLRendered = indexHTML
+	if logoURL := os.Getenv("LOGO_LINK_URL"); logoURL != "" {
+		const logoImg = `<img src="/favicon.svg" alt="DockMind" class="app__logo" width="24" height="24">`
+		escaped := html.EscapeString(logoURL)
+		s.indexHTMLRendered = bytes.Replace(
+			indexHTML,
+			[]byte(logoImg),
+			[]byte(`<a href="`+escaped+`" class="app__logo-link">`+logoImg+`</a>`),
+			1,
+		)
+	}
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -49,6 +68,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /docs", s.handleDocs)
 	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
+	mux.HandleFunc("GET /favicon.svg", s.handleFavicon)
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	return mux
 }
@@ -103,8 +123,14 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 	w.Write(openapiSpec)
 }
 
+func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.WriteHeader(http.StatusOK)
+	w.Write(faviconSVG)
+}
+
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write(indexHTML)
+	w.Write(s.indexHTMLRendered)
 }
