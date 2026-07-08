@@ -294,6 +294,8 @@ func TestWebUIRoutes(t *testing.T) {
 			"/docs",
 			"fetch",
 			"setInterval",
+			"llama-swap health",
+			"component__dot.is-danger",
 		} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("expected body to contain %q, got %q", want, body)
@@ -304,6 +306,9 @@ func TestWebUIRoutes(t *testing.T) {
 		}
 		if strings.Contains(body, "http://") {
 			t.Fatalf("expected body to contain no http:// URLs")
+		}
+		if strings.Contains(body, "Health check") {
+			t.Fatalf("expected body to no longer contain the confusing label \"Health check\", got %q", body)
 		}
 	})
 

@@ -103,6 +103,10 @@
       background: var(--danger);
     }
 
+    .component__dot.is-danger {
+      background: var(--danger);
+    }
+
     .state__dot.is-neutral {
       background: var(--neutral);
     }
@@ -363,7 +367,7 @@
       </div>
       <div class="component">
         <span class="component__dot" id="health-dot"></span>
-        <span class="component__label">Health check</span>
+        <span class="component__label">llama-swap health</span>
         <span class="component__value" id="health-value">—</span>
       </div>
     </section>
@@ -486,8 +490,16 @@
       els.swapValue.textContent = data.llamaSwapRunning ? "Running" : "Stopped";
       setComponentDot(els.swapDot, data.llamaSwapRunning);
 
-      els.healthValue.textContent = data.llamaSwapHealthy ? "Healthy" : "Unhealthy";
-      setComponentDot(els.healthDot, data.llamaSwapHealthy);
+      if (!data.llamaSwapRunning) {
+        els.healthValue.textContent = "Stopped";
+        els.healthDot.className = "component__dot";
+      } else if (data.llamaSwapHealthy) {
+        els.healthValue.textContent = "Healthy";
+        els.healthDot.className = "component__dot is-on";
+      } else {
+        els.healthValue.textContent = "Unhealthy";
+        els.healthDot.className = "component__dot is-danger";
+      }
 
       if (data.lastError) {
         els.errorBanner.hidden = false;
