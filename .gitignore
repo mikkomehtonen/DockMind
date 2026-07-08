@@ -2,3 +2,4 @@
 /cmd/dockmind/dockmind
 *.exe
 .opencode/
+/config.yaml
