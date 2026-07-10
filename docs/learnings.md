@@ -48,8 +48,32 @@
 **What happened**: For story 006, the plan commit added the `006-add-favicon-logo` line to `docs/product.md` but did not add the matching assertion to `product_test.go`. The acceptance reviewer flagged the missing test even though the implementation was correct and the existing test passed.
 **Takeaway**: Do not assume a plan commit fully updated all docs/tests mentioned in the story. Compare the story's file checklist against the actual branch state and fill in any gaps left by the planner.
 
+## Code reviewer checks pseudocode in design documents for concurrency correctness
+**Date**: 2026-07-10
+**Area**: code review / design documents
+**What happened**: Story 007 is a design-only deliverable (Markdown document, no production code). The code reviewer still flagged a blocking correctness issue: the `EnsureReady` pseudocode read `m.lastError` outside the `stateMu` lock, contradicting the document's own Synchronization section which states `stateMu` guards `lastError`. This would be a data race if implemented verbatim.
+**Takeaway**: Design-document pseudocode is reviewed as near-final implementation, not as illustrative prose. Before running reviewers on a design-only story, verify that pseudocode is internally consistent with its own stated synchronization rules — capture shared state under the lock that guards it, and ensure the pseudocode reflects every case described in the surrounding prose.
+
 ## Story-provided test snippets may conflict with the implementation they prescribe
 **Date**: 2026-07-08
 **Area**: testing / stories
 **What happened**: Story 006 instructed adding a CSS rule `.app__logo-link` and then asserted the response body should not contain the substring `app__logo-link` when the env var was unset. The CSS selector made that assertion impossible, so the test had to check for the HTML attribute `class="app__logo-link"` instead.
 **Takeaway**: Treat story test snippets as intent, not gospel. Run them against the real implementation; when a literal substring check collides with static markup, tighten the assertion to the actual HTML contract and keep the AC's intent.
+
+## Reviewer agents running peck story load can switch branches in the shared repo
+**Date**: 2026-07-10
+**Area**: workflow / git
+**What happened**: During story 007, reviewer agents ran `peck story load 007` which created a separate `007` branch (distinct from `007-openai-gateway`) and checked it out in the shared `.git` directory. Subsequent commits went to the `007` branch instead of `007-openai-gateway`, causing the design revision to diverge onto the wrong branch. The issue was detected only when `git log --graph --all` showed two divergent branch tips.
+**Takeaway**: After reviewer agents run, verify the current branch with `git branch --show-current` before committing. If the branch has changed, either switch back with `git checkout <correct-branch>` or use `git checkout <correct-branch> -- <files>` to port changes across. Use `git log --graph --all` to diagnose divergent branches.
+
+## Code reviewer validates Go stdlib internals in design pseudocode
+**Date**: 2026-07-10
+**Area**: code review / design documents
+**What happened**: The code reviewer found two blocking issues in story 007's design pseudocode by checking against actual Go 1.24 stdlib behavior: (1) `responseTracker` embedding `http.ResponseWriter` does not promote the concrete type's `Flush` method — `http.ResponseController.Flush()` needs an `Unwrap() http.ResponseWriter` method to traverse the wrapper, or SSE streaming silently breaks; (2) `errors.Is(err, context.DeadlineExceeded)` returns true for startup failures because the existing `poll` function wraps `context.DeadlineExceeded` in `lastError` — a sentinel error (`ErrBackendError`) is needed to distinguish startup failure from client timeout.
+**Takeaway**: When writing design pseudocode that wraps stdlib types or uses `errors.Is`, verify the behavior against the actual Go version's source. Interface embedding does not promote concrete-type methods; `errors.Is` traverses the entire wrapped chain. Use sentinel errors to disambiguate error categories when underlying errors may share wrapped types.
+
+## Buffer-first ResponseWriter wrappers are simpler than tee for non-streaming responses
+**Date**: 2026-07-10
+**Area**: architecture / design documents
+**What happened**: The model-list cache design initially used a `capturingWriter` that teed the response body to a buffer while streaming to the client (same pattern as `responseTracker`). The code reviewer flagged two blocking issues: (1) the tee approach cannot detect truncation — a partial 200 response with bytes in the buffer passes the `buf.Len() > 0` check and overwrites a valid cache; (2) the shared `ErrorHandler` does `w.(*responseTracker)` which fails for `*capturingWriter`. Replacing the tee with a buffer-first `bufferingWriter` (captures the full response before sending anything to the client) fixed both: truncation is detected via a `failed` flag set by the `ErrorHandler`, and no `Unwrap()` method is needed because flush errors are silently discarded for small non-streaming responses.
+**Takeaway**: For non-streaming HTTP responses (e.g. model lists, metadata endpoints), use a buffer-first `ResponseWriter` wrapper that captures the full response before sending to the client. This detects truncation for free (the `ErrorHandler` sets a `failed` flag), avoids `Unwrap()` complexity, and simplifies the `ErrorHandler` (it can type-assert on the wrapper and set a flag instead of writing an error). Reserve the tee/streaming pattern (`responseTracker` with `Unwrap()`) for SSE streaming endpoints where buffering the full response is impractical.

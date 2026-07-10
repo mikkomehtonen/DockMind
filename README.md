@@ -118,3 +118,4 @@ shutdown:
 
 - [MVP Specification](docs/DockMind_MVP_Specification.md) — complete API semantics, state machine, and config schema.
 - [Product Overview](docs/product.md) — features, non-goals, and known limitations.
+- [Gateway Design](docs/DockMind_Gateway_Design.md) — design for the opt-in OpenAI-compatible gateway with auto-startup and idle shutdown.
