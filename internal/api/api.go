@@ -35,6 +35,8 @@ type Server struct {
 	machine           StateMachine
 	logger            *slog.Logger
 	indexHTMLRendered []byte
+	gatewayHandler    http.Handler // nil = gateway disabled
+	modelsHandler     http.Handler // nil = gateway disabled
 }
 
 func NewServer(machine StateMachine, logger *slog.Logger) *Server {
@@ -59,6 +61,12 @@ func NewServer(machine StateMachine, logger *slog.Logger) *Server {
 	return s
 }
 
+// SetGatewayHandlers registers the OpenAI-compatible gateway handlers.
+func (s *Server) SetGatewayHandlers(inference, models http.Handler) {
+	s.gatewayHandler = inference
+	s.modelsHandler = models
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", s.handleStatus)
@@ -70,6 +78,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("GET /favicon.svg", s.handleFavicon)
 	mux.HandleFunc("GET /{$}", s.handleIndex)
+	if s.modelsHandler != nil {
+		mux.Handle("GET /v1/models", s.modelsHandler)
+	}
+	if s.gatewayHandler != nil {
+		mux.Handle("/v1/{rest...}", s.gatewayHandler)
+	}
 	return mux
 }
 

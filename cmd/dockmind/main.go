@@ -13,6 +13,7 @@ import (
 	"github.com/dockmind/dockmind/internal/api"
 	"github.com/dockmind/dockmind/internal/config"
 	"github.com/dockmind/dockmind/internal/docker"
+	"github.com/dockmind/dockmind/internal/gateway"
 	"github.com/dockmind/dockmind/internal/gpu"
 	"github.com/dockmind/dockmind/internal/health"
 	"github.com/dockmind/dockmind/internal/shelly"
@@ -48,6 +49,25 @@ func main() {
 	)
 
 	server := api.NewServer(machine, logger)
+
+	var gw *gateway.Gateway
+	if cfg.Gateway.Enabled {
+		gw, err = gateway.NewGatewayWithPollInterval(
+			cfg.LlamaSwap.BackendURL,
+			cfg.Gateway.IdleTimeout.Duration(),
+			cfg.Gateway.RequestTimeout.Duration(),
+			cfg.GPU.PollInterval.Duration(),
+			machine,
+			logger,
+		)
+		if err != nil {
+			logger.Error("failed to create gateway", "error", err)
+			os.Exit(1)
+		}
+		server.SetGatewayHandlers(gw.Handler(), gw.ModelsHandler())
+		gw.StartIdleWatcher(context.Background())
+	}
+
 	httpServer := &http.Server{
 		Addr:    cfg.Server.Address,
 		Handler: server.Handler(),
@@ -68,6 +88,9 @@ func main() {
 	logger.Info("shutting down server")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if gw != nil {
+		gw.StopIdleWatcher()
+	}
 	if err := httpServer.Shutdown(ctx); err != nil {
 		logger.Error("shutdown error", "error", err)
 	}

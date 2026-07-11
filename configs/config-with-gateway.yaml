@@ -15,4 +15,6 @@ startup:
 shutdown:
   timeout: 30s
 gateway:
-  enabled: false
+  enabled: true
+  idleTimeout: 300s
+  requestTimeout: 120s

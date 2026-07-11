@@ -68,9 +68,17 @@ type fakeDocker struct {
 	running  bool
 	startErr error
 	stopErr  error
+	block    chan struct{} // blocks both Start and Stop until closed
 }
 
 func (f *fakeDocker) Start(ctx context.Context) error {
+	if f.block != nil {
+		select {
+		case <-f.block:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.startErr != nil {
@@ -81,6 +89,13 @@ func (f *fakeDocker) Start(ctx context.Context) error {
 }
 
 func (f *fakeDocker) Stop(ctx context.Context) error {
+	if f.block != nil {
+		select {
+		case <-f.block:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.stopErr != nil {
@@ -516,5 +531,269 @@ func assertLastErrorContains(t *testing.T, err error, substrs ...string) {
 		if !strings.Contains(strings.ToLower(msg), strings.ToLower(s)) {
 			t.Fatalf("expected lastError %q to contain %q", msg, s)
 		}
+	}
+}
+
+func TestState(t *testing.T) {
+	m, _, _, _, _ := newTestMachine()
+
+	cases := []struct {
+		state State
+		want  string
+	}{
+		{Off, "Off"},
+		{Starting, "Starting"},
+		{Ready, "Ready"},
+		{ShuttingDown, "ShuttingDown"},
+		{Error, "Error"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.want, func(t *testing.T) {
+			m.stateMu.Lock()
+			m.state = tc.state
+			m.stateMu.Unlock()
+
+			got := m.State()
+			if got != tc.state {
+				t.Errorf("expected State %s, got %s", tc.want, got.String())
+			}
+		})
+	}
+}
+
+func TestEnsureReady_WhenReady(t *testing.T) {
+	m, _, gpu, _, health := newTestMachine()
+	gpu.present = true
+	health.healthy = true
+
+	// Power on first so state becomes Ready
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	ctx := context.Background()
+	err := m.EnsureReady(ctx)
+	if err != nil {
+		t.Fatalf("EnsureReady on Ready state returned error: %v", err)
+	}
+}
+
+func TestEnsureReady_WhenError(t *testing.T) {
+	m, _, _, _, _ := newTestMachine()
+
+	// Set state to Error with a lastError
+	lastErr := errors.New("gpu timeout")
+	m.stateMu.Lock()
+	m.state = Error
+	m.lastError = lastErr
+	m.stateMu.Unlock()
+
+	err := m.EnsureReady(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrBackendError) {
+		t.Fatalf("expected error wrapping ErrBackendError, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "gpu timeout") {
+		t.Errorf("expected error to contain original lastError, got: %v", err)
+	}
+}
+
+func TestEnsureReady_WhenOff(t *testing.T) {
+	m, _, gpu, _, health := newTestMachine()
+	gpu.present = true
+	health.healthy = true
+
+	ctx := context.Background()
+	err := m.EnsureReady(ctx)
+	if err != nil {
+		t.Fatalf("EnsureReady returned error: %v", err)
+	}
+	m.Wait()
+
+	if m.State() != Ready {
+		t.Errorf("expected state to be Ready after EnsureReady, got %s", m.State())
+	}
+}
+
+func TestEnsureReady_WhenStarting(t *testing.T) {
+	m, _, gpu, docker, health := newTestMachine()
+	gpu.present = true
+	health.healthy = true
+
+	// Block docker.Start so the startup transition stays in Starting.
+	docker.block = make(chan struct{})
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	// Wait for state to actually become Starting.
+	for i := 0; i < 100; i++ {
+		if m.State() == Starting {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != Starting {
+		t.Fatalf("expected state to become Starting, got %s", m.State())
+	}
+
+	// EnsureReady should wait for the startup to complete.
+	done := make(chan error, 1)
+	go func() {
+		done <- m.EnsureReady(context.Background())
+	}()
+
+	// Unblock startup and let it complete.
+	close(docker.block)
+
+	err := <-done
+	if err != nil {
+		t.Fatalf("EnsureReady returned error: %v", err)
+	}
+
+	m.Wait()
+	if m.State() != Ready {
+		t.Errorf("expected state to be Ready, got %s", m.State())
+	}
+}
+
+func TestEnsureReady_WhenShuttingDown(t *testing.T) {
+	m, _, gpu, docker, health := newTestMachine()
+	gpu.present = true
+	health.healthy = true
+
+	// Power on first to get to Ready
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	// Block docker.Stop so shutdown stalls after setState(ShuttingDown)
+	docker.block = make(chan struct{})
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	// Wait for state to actually become ShuttingDown (goroutine has started)
+	for i := 0; i < 100; i++ {
+		if m.State() == ShuttingDown {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != ShuttingDown {
+		t.Fatalf("expected state to become ShuttingDown, got %s", m.State())
+	}
+
+	// EnsureReady should wait for shutdown to complete, then trigger PowerOn
+	done := make(chan error, 1)
+	go func() {
+		done <- m.EnsureReady(context.Background())
+	}()
+
+	// Let shutdown proceed by unblocking docker.Stop
+	close(docker.block)
+
+	err := <-done
+	if err != nil {
+		t.Fatalf("EnsureReady returned error: %v", err)
+	}
+
+	m.Wait()
+	if m.State() != Ready {
+		t.Errorf("expected state to be Ready after EnsureReady from ShuttingDown, got %s", m.State())
+	}
+}
+
+func TestEnsureReady_ContextCanceled(t *testing.T) {
+	m, _, _, _, _ := newTestMachine()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	err := m.EnsureReady(ctx)
+	if err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if m.State() == Error {
+		t.Error("expected state machine not in Error state after context cancellation")
+	}
+}
+
+func TestEnsureReady_ContextDeadlineExceeded(t *testing.T) {
+	m, _, gpu, docker, health := newTestMachine()
+	gpu.present = true
+	health.healthy = true
+
+	// Block docker.Start so startup takes longer than our context deadline
+	docker.block = make(chan struct{})
+
+	// Use a very short timeout — startup will be blocked by docker.block
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+
+	err := m.EnsureReady(ctx)
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+
+	// Unblock and let startup complete so state machine is clean for subsequent tests
+	close(docker.block)
+	m.Wait()
+}
+
+func TestEnsureReady_ConcurrentCalls(t *testing.T) {
+	m, _, gpu, _, health := newTestMachine()
+	gpu.present = true
+	health.healthy = true
+
+	const N = 5
+	var wg sync.WaitGroup
+	errCh := make(chan error, N)
+
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			errCh <- m.EnsureReady(ctx)
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	// All N calls should return nil when startup succeeds
+	for err := range errCh {
+		if err != nil {
+			t.Errorf("EnsureReady returned error: %v", err)
+		}
+	}
+
+	m.Wait()
+	if m.State() != Ready {
+		t.Errorf("expected state to be Ready, got %s", m.State())
+	}
+
+	// Verify only one startup was actually triggered (power.setCalls should have exactly one true)
+	power := m.power.(*fakePower)
+	power.mu.Lock()
+	setTrueCount := 0
+	for _, on := range power.setCalls {
+		if on {
+			setTrueCount++
+		}
+	}
+	power.mu.Unlock()
+
+	// Should be exactly 1: one PowerOn → SetPower(true) call
+	// (plus any shutdown calls if EnsureReady went through ShuttingDown first, but it shouldn't since we started from Off)
+	if setTrueCount != 1 {
+		t.Errorf("expected exactly 1 power-on call, got %d", setTrueCount)
 	}
 }

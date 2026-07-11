@@ -238,7 +238,7 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected paths to be an object")
 		}
-		for _, p := range []string{"/status", "/power/on", "/power/off", "/restart", "/health"} {
+		for _, p := range []string{"/status", "/power/on", "/power/off", "/restart", "/health", "/v1/models", "/v1/chat/completions"} {
 			if _, ok := paths[p]; !ok {
 				t.Fatalf("expected paths to contain %q", p)
 			}
@@ -263,6 +263,28 @@ func TestSwaggerRoutes(t *testing.T) {
 		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "lastError"} {
 			if _, ok := properties[field]; !ok {
 				t.Fatalf("expected StatusResponse properties to contain %q", field)
+			}
+		}
+
+		openAIError, ok := schemas["OpenAIError"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected components.schemas.OpenAIError to be an object")
+		}
+		errorProp, ok := openAIError["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected OpenAIError.properties to be an object")
+		}
+		errorObj, ok := errorProp["error"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected OpenAIError.properties.error to be an object")
+		}
+		errorProps, ok := errorObj["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected OpenAIError.properties.error.properties to be an object")
+		}
+		for _, field := range []string{"message", "type", "code"} {
+			if _, ok := errorProps[field]; !ok {
+				t.Fatalf("expected OpenAIError error properties to contain %q", field)
 			}
 		}
 	})
@@ -400,6 +422,85 @@ func TestWebUIRoutes(t *testing.T) {
 		}
 		if !strings.Contains(rec.Body.String(), "swagger-ui") {
 			t.Fatalf("expected body to contain swagger-ui, got %q", rec.Body.String())
+		}
+	})
+}
+
+func TestGatewayRoutes(t *testing.T) {
+	t.Run("no handlers returns 404", func(t *testing.T) {
+		server := NewServer(&fakeStateMachine{}, nil)
+		for _, path := range []string{"/v1/models", "/v1/chat/completions"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("expected 404 for %s without gateway handlers, got %d", path, rec.Code)
+			}
+		}
+	})
+
+	t.Run("handlers are invoked", func(t *testing.T) {
+		var modelsCalled, inferenceCalled bool
+		modelsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			modelsCalled = true
+			w.WriteHeader(http.StatusOK)
+		})
+		inferenceHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			inferenceCalled = true
+			w.WriteHeader(http.StatusOK)
+		})
+
+		server := NewServer(&fakeStateMachine{}, nil)
+		server.SetGatewayHandlers(inferenceHandler, modelsHandler)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200 for /v1/models, got %d", rec.Code)
+		}
+		if !modelsCalled {
+			t.Error("models handler was not invoked")
+		}
+
+		req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		rec = httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200 for /v1/chat/completions, got %d", rec.Code)
+		}
+		if !inferenceCalled {
+			t.Error("inference handler was not invoked")
+		}
+	})
+
+	t.Run("existing routes still work with gateway handlers", func(t *testing.T) {
+		server := NewServer(&fakeStateMachine{}, nil)
+		server.SetGatewayHandlers(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }),
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }),
+		)
+
+		cases := []struct {
+			method string
+			path   string
+			want   int
+		}{
+			{http.MethodGet, "/status", http.StatusOK},
+			{http.MethodPost, "/power/on", http.StatusAccepted},
+			{http.MethodPost, "/power/off", http.StatusAccepted},
+			{http.MethodPost, "/restart", http.StatusAccepted},
+			{http.MethodGet, "/health", http.StatusOK},
+			{http.MethodGet, "/docs", http.StatusOK},
+			{http.MethodGet, "/", http.StatusOK},
+		}
+		for _, tc := range cases {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Errorf("expected %d for %s %s, got %d", tc.want, tc.method, tc.path, rec.Code)
+			}
 		}
 	})
 }

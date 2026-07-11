@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"time"
 
@@ -42,7 +43,14 @@ type DockerConfig struct {
 }
 
 type LlamaSwapConfig struct {
-	HealthURL string `yaml:"healthUrl"`
+	HealthURL  string `yaml:"healthUrl"`
+	BackendURL string `yaml:"backendUrl"`
+}
+
+type GatewayConfig struct {
+	Enabled        bool     `yaml:"enabled"`
+	IdleTimeout    Duration `yaml:"idleTimeout"`
+	RequestTimeout Duration `yaml:"requestTimeout"`
 }
 
 type GPUConfig struct {
@@ -65,6 +73,7 @@ type Config struct {
 	GPU       GPUConfig       `yaml:"gpu"`
 	Startup   StartupConfig   `yaml:"startup"`
 	Shutdown  ShutdownConfig  `yaml:"shutdown"`
+	Gateway   GatewayConfig   `yaml:"gateway"`
 }
 
 func Load(path string) (*Config, error) {
@@ -100,6 +109,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Shutdown.Timeout == 0 {
 		cfg.Shutdown.Timeout = Duration(30 * time.Second)
 	}
+	if cfg.Gateway.Enabled && cfg.Gateway.RequestTimeout == 0 {
+		cfg.Gateway.RequestTimeout = Duration(120 * time.Second)
+	}
 }
 
 func validate(cfg *Config) error {
@@ -120,6 +132,21 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Shutdown.Timeout <= 0 {
 		return errors.New("shutdown.timeout must be positive")
+	}
+	if cfg.Gateway.Enabled {
+		if cfg.LlamaSwap.BackendURL == "" {
+			return errors.New("llamaSwap.backendUrl is required when gateway.enabled is true")
+		}
+		parsed, err := url.Parse(cfg.LlamaSwap.BackendURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("llamaSwap.backendUrl must be a valid URL with scheme and host: %q", cfg.LlamaSwap.BackendURL)
+		}
+		if cfg.Gateway.IdleTimeout < 0 {
+			return errors.New("gateway.idleTimeout must be >= 0")
+		}
+		if cfg.Gateway.RequestTimeout <= 0 {
+			return errors.New("gateway.requestTimeout must be positive")
+		}
 	}
 	return nil
 }

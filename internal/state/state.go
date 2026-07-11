@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -42,6 +43,8 @@ const (
 	ResultAlreadyInState
 	ResultConflict
 )
+
+var ErrBackendError = errors.New("backend in error state")
 
 type PowerController interface {
 	SetPower(ctx context.Context, on bool) error
@@ -87,6 +90,7 @@ type Machine struct {
 	stateMu      sync.Mutex
 	state        State
 	lastError    error
+	changeCh     chan struct{}
 	wg           sync.WaitGroup
 }
 
@@ -104,6 +108,7 @@ func New(power PowerController, gpu GPUMonitor, docker ContainerController, heal
 		startupTimeout:  startupTimeout,
 		shutdownTimeout: shutdownTimeout,
 		state:           Off,
+		changeCh:        make(chan struct{}),
 	}
 }
 
@@ -256,7 +261,68 @@ func (m *Machine) setState(s State, err error) {
 	m.stateMu.Lock()
 	m.state = s
 	m.lastError = err
+	close(m.changeCh)
+	m.changeCh = make(chan struct{})
 	m.stateMu.Unlock()
+}
+
+// State returns the current state of the machine.
+func (m *Machine) State() State {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	return m.state
+}
+
+// EnsureReady blocks until the backend is Ready, or an error/context cancellation occurs.
+// Returns nil when Ready, ErrBackendError wrapped with lastError if in Error state,
+// context.Canceled/DeadlineExceeded on client timeout/cancellation.
+func (m *Machine) EnsureReady(ctx context.Context) error {
+	for {
+		m.stateMu.Lock()
+		current := m.state
+		lastErr := m.lastError
+		ch := m.changeCh
+		m.stateMu.Unlock()
+
+		switch current {
+		case Ready:
+			return nil
+		case Error:
+			return fmt.Errorf("%w: %w", ErrBackendError, lastErr)
+		case Off:
+			// Trigger startup if not already in progress, then wait for the
+			// state-change signal we captured before calling PowerOn.
+			// If PowerOn reports a conflict (another transition still holds
+			// transitionMu after setState(Off)), re-evaluate state instead of
+			// waiting on a channel that may never close again.
+			result := m.PowerOn()
+			switch result {
+			case ResultAccepted:
+				select {
+				case <-ch:
+					// State changed; loop to re-evaluate.
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			case ResultConflict, ResultAlreadyInState:
+				continue
+			}
+		case Starting:
+			// Another request already triggered startup; wait for state change.
+			select {
+			case <-ch:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		case ShuttingDown:
+			// Wait for shutdown to complete (→ Off), then loop back to PowerOn.
+			select {
+			case <-ch:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
 }
 
 func (m *Machine) startup() {

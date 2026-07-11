@@ -85,6 +85,53 @@
           }
         }
       }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "summary": "Reverse proxy to llama-swap chat completions (OpenAI-compatible)",
+        "description": "Proxies the request to the backend AI inference server. Auto-starts the system if it is off. Returns 503 when the backend is unavailable.",
+        "responses": {
+          "200": {
+            "description": "Response from llama-swap"
+          },
+          "400": {
+            "description": "Bad request — forwarded to llama-swap"
+          },
+          "503": {
+            "description": "Service unavailable: backend is off or unreachable. Includes Retry-After header.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Seconds until the system may retry."
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "summary": "List available models from llama-swap",
+        "description": "Returns cached model list when backend is unavailable. Serves stale cache with X-DockMind-Cached: true header.",
+        "responses": {
+          "200": {
+            "description": "Model list (fresh or cached)",
+            "headers": {
+              "X-DockMind-Cached": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Present and set to 'true' when served from cache."
+              }
+            }
+          },
+          "503": {
+            "description": "Model cache unavailable: no cached data and backend unreachable."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -114,6 +161,29 @@
           "lastError": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "OpenAIError": {
+        "description": "Error response returned by the OpenAI-compatible gateway when the backend is unavailable.",
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "description": "Human-readable error message."
+              },
+              "type": {
+                "type": "string",
+                "description": "Error type, e.g. 'service_unavailable'."
+              },
+              "code": {
+                "type": "string",
+                "description": "Machine-readable error code, e.g. 'backend_error', 'startup_timeout', 'model_cache_unavailable'."
+              }
+            }
           }
         }
       }

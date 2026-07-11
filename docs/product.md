@@ -6,8 +6,8 @@ powering the eGPU on/off via a Shelly Plug Gen3, starting and stopping the
 `llama-swap` Docker container, and reporting system state through a
 deterministic state machine. It is designed for a trusted local network and
 orchestrates hardware and containers. An opt-in OpenAI-compatible gateway mode
-is designed but not yet implemented; see the
-[Gateway Design](DockMind_Gateway_Design.md) document.
+provides automatic startup on first request and idle auto-shutdown; see the
+[Gateway Design](DockMind_Gateway_Design.md) document for architecture details.
 
 ## Features
 
@@ -22,6 +22,7 @@ is designed but not yet implemented; see the
 - **Web UI** — responsive mobile-first control panel served at `/`, polling `/status` once per second, with power on/off and restart controls ([004-web-ui](../stories/004-web-ui/story.md))
 - **Favicon & Logo** — SVG favicon served at `/favicon.svg` and displayed as a logo next to the page title in the web UI; the logo links to a configurable URL via the `LOGO_LINK_URL` environment variable ([006-add-favicon-logo](../stories/006-add-favicon-logo/story.md))
 - **OpenAI Gateway (design)** — design document for an opt-in OpenAI-compatible reverse proxy with automatic startup on first request and idle auto-shutdown ([007-openai-gateway](../stories/007-openai-gateway/story.md))
+- **OpenAI Gateway** — opt-in OpenAI-compatible reverse proxy with automatic startup on first request, model-list caching, and idle auto-shutdown ([008-openai-gateway](../stories/008-openai-gateway/story.md))
 
 ## Non-Goals
 
@@ -39,4 +40,4 @@ is designed but not yet implemented; see the
 - Docker integration uses the CLI (subprocess), not the Docker Engine API.
 - Error recovery requires manual intervention via `POST /power/off`; there is no automatic retry. If the Shelly plug is unreachable, the system cannot leave the Error state.
 - Single GPU, single inference server, and single Shelly plug only.
-- The OpenAI gateway is designed but not yet implemented. See [DockMind_Gateway_Design.md](DockMind_Gateway_Design.md) for the design and incremental implementation plan.
+- The OpenAI gateway is opt-in and disabled by default. Enable it via `gateway.enabled: true` in config.yaml. The model-list cache is in-memory only and not persisted across DockMind restarts. See [DockMind_Gateway_Design.md](DockMind_Gateway_Design.md) for the design and architecture details.
