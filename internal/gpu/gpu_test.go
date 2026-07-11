@@ -16,6 +16,7 @@ func TestStatus(t *testing.T) {
 		execErr     error
 		wantPresent bool
 		wantName    string
+		wantErr     bool
 	}{
 		{
 			name:        "single gpu",
@@ -40,12 +41,14 @@ func TestStatus(t *testing.T) {
 			execErr:     &exec.Error{Name: "nvidia-smi", Err: exec.ErrNotFound},
 			wantPresent: false,
 			wantName:    "",
+			wantErr:     true,
 		},
 		{
 			name:        "non-zero exit",
 			exitErr:     true,
 			wantPresent: false,
 			wantName:    "",
+			wantErr:     true,
 		},
 	}
 
@@ -64,7 +67,10 @@ func TestStatus(t *testing.T) {
 			}
 
 			present, name, err := m.Status(context.Background())
-			if err != nil {
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if present != tc.wantPresent {
@@ -77,17 +83,27 @@ func TestStatus(t *testing.T) {
 	}
 }
 
-func TestStatusSwallowsExecError(t *testing.T) {
+func TestStatusReturnsExecError(t *testing.T) {
 	m := &Monitor{
 		exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			return nil, errors.New("some error")
 		},
 	}
 	present, name, err := m.Status(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
 	}
 	if present || name != "" {
 		t.Fatalf("expected absent GPU on error")
+	}
+}
+
+func TestNew(t *testing.T) {
+	m := New()
+	if m == nil {
+		t.Fatalf("expected non-nil Monitor")
+	}
+	if m.exec == nil {
+		t.Fatalf("expected default execFunc")
 	}
 }

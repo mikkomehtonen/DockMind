@@ -342,6 +342,9 @@ func (m *Machine) startup() {
 	m.logger.Info("Waiting for GPU")
 	if err := m.poll(ctx, m.pollInterval, func(ctx context.Context) (bool, error) {
 		present, _, err := m.gpu.Status(ctx)
+		if err != nil {
+			m.logger.Debug("nvidia-smi not ready yet", "error", err)
+		}
 		return present, err
 	}); err != nil {
 		m.setState(Error, fmt.Errorf("gpu detection timeout: %w", err))
@@ -404,7 +407,11 @@ func (m *Machine) shutdown() {
 	m.logger.Info("Waiting for GPU to disappear")
 	if err := m.poll(ctx, m.pollInterval, func(ctx context.Context) (bool, error) {
 		present, _, err := m.gpu.Status(ctx)
-		return !present, err
+		if err != nil {
+			m.logger.Debug("nvidia-smi failed during shutdown, treating GPU as gone", "error", err)
+			return true, nil
+		}
+		return !present, nil
 	}); err != nil {
 		m.setState(Error, fmt.Errorf("gpu power off timeout: %w", err))
 		m.logger.Error("GPU power off timeout", "error", err)

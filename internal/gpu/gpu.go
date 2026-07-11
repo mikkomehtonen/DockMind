@@ -2,7 +2,6 @@ package gpu
 
 import (
 	"context"
-	"log/slog"
 	"os/exec"
 	"strings"
 )
@@ -10,31 +9,22 @@ import (
 type execFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 type Monitor struct {
-	exec   execFunc
-	logger *slog.Logger
+	exec execFunc
 }
 
-func New(logger *slog.Logger) *Monitor {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func New() *Monitor {
 	return &Monitor{
 		exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			cmd := exec.CommandContext(ctx, name, args...)
 			return cmd.Output()
 		},
-		logger: logger,
 	}
 }
 
 func (m *Monitor) Status(ctx context.Context) (bool, string, error) {
 	out, err := m.exec(ctx, "nvidia-smi", "--query-gpu=name", "--format=csv,noheader")
 	if err != nil {
-		// Per MVP spec, any nvidia-smi failure is treated as GPU absent.
-		if m.logger != nil {
-			m.logger.Warn("nvidia-smi failed", "error", err)
-		}
-		return false, "", nil
+		return false, "", err
 	}
 	lines := strings.Split(string(out), "\n")
 	for _, line := range lines {

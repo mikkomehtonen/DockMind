@@ -89,3 +89,9 @@
 **Area**: code review / testing
 **What happened**: `bufferingWriter` initially implemented the full `http.ResponseWriter` interface (`Header`, `Write`, `WriteHeader`) and had a dedicated test for it. The code reviewer flagged this as blocking dead code because the production models path wrote directly to the struct's exported fields and never invoked the interface methods. Removing the methods and the test that exercised only the dead path was required to pass.
 **Takeaway**: Do not keep unused interface methods just because a wrapper *could* be used as an `http.ResponseWriter`. If production code accesses the wrapper through concrete fields, the interface methods are dead code and will be flagged. Remove them and any tests that only exercise the unused interface contract.
+
+## fakePower.SetPower mutates fakeGPU.present in state tests
+**Date**: 2026-07-11
+**Area**: testing / state machine
+**What happened**: When writing tests that drive GPU state manually (e.g., simulating nvidia-smi errors during startup or shutdown), the GPU appeared or disappeared instantly because `fakePower.SetPower` sets `fakeGPU.present = on` whenever `power.gpu` is non-nil. This caused tests to complete without ever hitting the intended error path.
+**Takeaway**: For state tests that need explicit control over `fakeGPU.present` or `fakeGPU.err`, set `power.gpu = nil` to disable the automatic coupling. Drive the GPU fields directly from the test (under `fakeGPU.mu` if accessed concurrently).

@@ -55,12 +55,45 @@ type fakeGPU struct {
 	mu      sync.Mutex
 	present bool
 	name    string
+	err     error
 }
 
 func (f *fakeGPU) Status(ctx context.Context) (bool, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.present, f.name, nil
+	if f.present {
+		return true, f.name, nil
+	}
+	return false, "", f.err
+}
+
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(ctx context.Context, level slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(ctx context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
+
+func (h *recordingHandler) WithGroup(name string) slog.Handler { return h }
+
+func (h *recordingHandler) hasRecord(level slog.Level, msgSubstr string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if r.Level == level && strings.Contains(r.Message, msgSubstr) {
+			return true
+		}
+	}
+	return false
 }
 
 type fakeDocker struct {
@@ -131,6 +164,18 @@ func newTestMachine() (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	m := New(power, gpu, docker, health, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond)
 	return m, power, gpu, docker, health
+}
+
+func newTestMachineWithRecorder() (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth, *recordingHandler) {
+	power := &fakePower{}
+	gpu := &fakeGPU{}
+	power.gpu = gpu
+	docker := &fakeDocker{}
+	health := &fakeHealth{}
+	handler := &recordingHandler{}
+	logger := slog.New(handler)
+	m := New(power, gpu, docker, health, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond)
+	return m, power, gpu, docker, health, handler
 }
 
 func TestPowerOnFromOff(t *testing.T) {
@@ -394,6 +439,124 @@ func TestShutdownGPUTimeout(t *testing.T) {
 		t.Fatalf("expected Error, got %v", m.state)
 	}
 	assertLastErrorContains(t, m.lastError, "gpu", "timeout")
+}
+
+func TestStartupGPUErrorThenPresent(t *testing.T) {
+	m, power, gpu, docker, health, handler := newTestMachineWithRecorder()
+	gpu.err = errors.New("nvidia-smi: command not found")
+	// Prevent SetPower from changing the GPU state; we drive it manually.
+	power.gpu = nil
+	docker.running = false
+	health.healthy = true
+
+	// After a few failed polls, the GPU becomes present.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		gpu.mu.Lock()
+		gpu.present = true
+		gpu.name = "NVIDIA GeForce RTX 5060 Ti"
+		gpu.err = nil
+		gpu.mu.Unlock()
+	}()
+
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready, got %v", m.state)
+	}
+	if !handler.hasRecord(slog.LevelDebug, "nvidia-smi") {
+		t.Fatalf("expected DEBUG log containing 'nvidia-smi'")
+	}
+	if handler.hasRecord(slog.LevelWarn, "nvidia-smi") {
+		t.Fatalf("expected no WARN log containing 'nvidia-smi'")
+	}
+}
+
+func TestStartupGPUErrorTimeout(t *testing.T) {
+	m, power, gpu, _, _, handler := newTestMachineWithRecorder()
+	gpu.err = errors.New("nvidia-smi: command not found")
+	// Prevent SetPower from changing the GPU state.
+	power.gpu = nil
+
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Error {
+		t.Fatalf("expected Error, got %v", m.state)
+	}
+	assertLastErrorContains(t, m.lastError, "gpu", "timeout")
+	if !handler.hasRecord(slog.LevelDebug, "nvidia-smi") {
+		t.Fatalf("expected DEBUG log containing 'nvidia-smi'")
+	}
+}
+
+func TestShutdownGPUErrorGone(t *testing.T) {
+	m, power, gpu, docker, _, handler := newTestMachineWithRecorder()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	gpu.name = "NVIDIA GeForce RTX 5060 Ti"
+	docker.running = true
+	// Prevent SetPower from changing the GPU state; we drive it manually.
+	power.gpu = nil
+
+	// After power is turned off, nvidia-smi starts failing.
+	go func() {
+		// Wait until power is turned off.
+		for {
+			power.mu.Lock()
+			on := power.on
+			power.mu.Unlock()
+			if !on {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		gpu.mu.Lock()
+		gpu.present = false
+		gpu.err = errors.New("nvidia-smi: command not found")
+		gpu.mu.Unlock()
+	}()
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off, got %v", m.state)
+	}
+	if m.lastError != nil {
+		t.Fatalf("expected no lastError, got %v", m.lastError)
+	}
+	if !handler.hasRecord(slog.LevelDebug, "nvidia-smi") {
+		t.Fatalf("expected DEBUG log containing 'nvidia-smi'")
+	}
+	if handler.hasRecord(slog.LevelWarn, "nvidia-smi") {
+		t.Fatalf("expected no WARN log containing 'nvidia-smi'")
+	}
+}
+
+func TestStatusGPUProbeError(t *testing.T) {
+	m, _, gpu, _, _, handler := newTestMachineWithRecorder()
+	gpu.err = errors.New("nvidia-smi: command not found")
+
+	status := m.Status()
+
+	if status.GPUPresent {
+		t.Fatalf("expected gpuPresent false, got true")
+	}
+	if status.GPUName != "" {
+		t.Fatalf("expected empty gpuName, got %q", status.GPUName)
+	}
+	if !handler.hasRecord(slog.LevelWarn, "GPU status probe failed") {
+		t.Fatalf("expected WARN log containing 'GPU status probe failed'")
+	}
 }
 
 func TestConcurrentTransitions(t *testing.T) {

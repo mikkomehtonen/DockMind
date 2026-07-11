@@ -33,7 +33,7 @@ func main() {
 	}
 
 	power := shelly.New(cfg.Shelly.Address, cfg.Shelly.Channel)
-	gpuMonitor := gpu.New(logger)
+	gpuMonitor := gpu.New()
 	dockerClient := docker.New(cfg.Docker.Container)
 	healthClient := health.New(cfg.LlamaSwap.HealthURL)
 
