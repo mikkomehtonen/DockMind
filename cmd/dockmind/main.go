@@ -64,6 +64,7 @@ func main() {
 			logger.Error("failed to create gateway", "error", err)
 			os.Exit(1)
 		}
+		gw.InitModelsCache(cfg.Gateway.ModelsCacheDir)
 		server.SetGatewayHandlers(gw.Handler(), gw.ModelsHandler())
 		gw.StartIdleWatcher(context.Background())
 	}

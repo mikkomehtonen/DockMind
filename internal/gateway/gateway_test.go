@@ -1,12 +1,15 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -1073,6 +1076,530 @@ func TestModelsHandler_DoesNotResetIdleTimer(t *testing.T) {
 	ctrl.mu.Unlock()
 	if calls == 0 {
 		t.Error("expected PowerOff called after idle timeout despite models polling")
+	}
+}
+
+func TestInitModelsCache_DisabledLogsWarning(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	ctrl := newFakeController()
+	gw, err := NewGateway("http://localhost:1234", 0, 2*time.Second, ctrl, logger)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.InitModelsCache("")
+
+	if gw.cacheStore != nil {
+		t.Error("expected cacheStore nil when dir is empty")
+	}
+	if gw.cachedModels.Load() != nil {
+		t.Error("expected cachedModels nil when dir is empty")
+	}
+	logOut := buf.String()
+	if !strings.Contains(logOut, "modelsCacheDir") {
+		t.Errorf("expected warning about modelsCacheDir, got: %s", logOut)
+	}
+}
+
+func TestInitModelsCache_LoadsExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	content := []byte(`{"data":[{"id":"model-1","object":"model"}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "models.json"), content, 0o644); err != nil {
+		t.Fatalf("write cache file: %v", err)
+	}
+
+	ctrl := newFakeController()
+	gw, err := NewGateway("http://localhost:1234", 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.InitModelsCache(dir)
+
+	cached := gw.cachedModels.Load()
+	if cached == nil {
+		t.Fatal("expected cached models loaded from disk")
+	}
+	if !bytes.Equal(cached.body, content) {
+		t.Errorf("expected body %q, got %q", content, cached.body)
+	}
+	if cached.contentType != "application/json" {
+		t.Errorf("expected contentType application/json, got %q", cached.contentType)
+	}
+}
+
+func TestInitModelsCache_MissingFileIsNormal(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	ctrl := newFakeController()
+	gw, err := NewGateway("http://localhost:1234", 0, 2*time.Second, ctrl, logger)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.InitModelsCache(dir)
+
+	if gw.cachedModels.Load() != nil {
+		t.Error("expected no cache loaded when file is missing")
+	}
+	if buf.Len() > 0 {
+		t.Errorf("expected no warning for missing file, got: %s", buf.String())
+	}
+}
+
+func TestInitModelsCache_EmptyFileIgnored(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "models.json"), []byte{}, 0o644); err != nil {
+		t.Fatalf("write empty cache file: %v", err)
+	}
+
+	ctrl := newFakeController()
+	gw, err := NewGateway("http://localhost:1234", 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.InitModelsCache(dir)
+
+	if gw.cachedModels.Load() != nil {
+		t.Error("expected empty file to be ignored")
+	}
+}
+
+func TestInitModelsCache_ReadErrorLogsWarning(t *testing.T) {
+	// Create a path where a parent component is a regular file, causing a read error.
+	tmp := t.TempDir()
+	badDir := filepath.Join(tmp, "notadir")
+	if err := os.WriteFile(badDir, []byte("x"), 0o644); err != nil {
+		t.Fatalf("create file at cache dir path: %v", err)
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	ctrl := newFakeController()
+	gw, err := NewGateway("http://localhost:1234", 0, 2*time.Second, ctrl, logger)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.InitModelsCache(badDir)
+
+	if gw.cachedModels.Load() != nil {
+		t.Error("expected no cache loaded on read error")
+	}
+	logOut := buf.String()
+	if !strings.Contains(logOut, "failed to load cached models") {
+		t.Errorf("expected warning about failed load, got: %s", logOut)
+	}
+}
+
+func TestModelsHandler_PersistsCacheOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	modelResponse := `{"data":[{"id":"model-1","object":"model"}]}`
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(modelResponse))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.InitModelsCache(dir)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	gw.ModelsHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "model-1") {
+		t.Errorf("expected response body to contain model-1, got: %s", rec.Body.String())
+	}
+
+	cached := gw.cachedModels.Load()
+	if cached == nil || !strings.Contains(string(cached.body), "model-1") {
+		t.Error("expected in-memory cache updated")
+	}
+
+	written, err := os.ReadFile(filepath.Join(dir, "models.json"))
+	if err != nil {
+		t.Fatalf("expected cache file written: %v", err)
+	}
+	if string(written) != modelResponse {
+		t.Errorf("expected file content %q, got %q", modelResponse, written)
+	}
+}
+
+func TestModelsHandler_DoesNotPersistCacheOnBackend500(t *testing.T) {
+	dir := t.TempDir()
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"boom"}`))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.InitModelsCache(dir)
+
+	oldCache := []byte(`{"data":[{"id":"old-model","object":"model"}]}`)
+	gw.cachedModels.Store(&modelCache{body: oldCache, contentType: "application/json"})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	gw.ModelsHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	cached := gw.cachedModels.Load()
+	if cached == nil || !strings.Contains(string(cached.body), "old-model") {
+		t.Error("expected in-memory cache unchanged")
+	}
+
+	if _, err := os.ReadFile(filepath.Join(dir, "models.json")); !os.IsNotExist(err) {
+		t.Errorf("expected no cache file written for backend 500, got err: %v", err)
+	}
+}
+
+func TestModelsHandler_NoPersistenceWhenDisabled(t *testing.T) {
+	dir := t.TempDir()
+	modelResponse := `{"data":[{"id":"model-1","object":"model"}]}`
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(modelResponse))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.InitModelsCache("")
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	gw.ModelsHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if _, err := os.ReadFile(filepath.Join(dir, "models.json")); !os.IsNotExist(err) {
+		t.Errorf("expected no cache file when persistence disabled, got err: %v", err)
+	}
+}
+
+func TestModelsHandler_SaveFailureLogsError(t *testing.T) {
+	// Create a path where the directory cannot be created because a parent is a file.
+	tmp := t.TempDir()
+	badDir := filepath.Join(tmp, "notadir")
+	if err := os.WriteFile(badDir, []byte("x"), 0o644); err != nil {
+		t.Fatalf("create file at cache dir path: %v", err)
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	modelResponse := `{"data":[{"id":"model-1","object":"model"}]}`
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(modelResponse))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, logger)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.InitModelsCache(badDir)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	gw.ModelsHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 despite save failure, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	cached := gw.cachedModels.Load()
+	if cached == nil || !strings.Contains(string(cached.body), "model-1") {
+		t.Error("expected in-memory cache updated even when save fails")
+	}
+
+	logOut := buf.String()
+	if !strings.Contains(logOut, "failed to persist cached models") {
+		t.Errorf("expected error log about save failure, got: %s", logOut)
+	}
+}
+
+func TestModelsHandler_ServesDiskCacheWhenOff(t *testing.T) {
+	dir := t.TempDir()
+	content := []byte(`{"data":[{"id":"disk-model","object":"model"}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "models.json"), content, 0o644); err != nil {
+		t.Fatalf("write cache file: %v", err)
+	}
+
+	ctrl := newFakeController()
+	ctrl.setState(state.Off, nil)
+	gw, err := NewGateway("http://localhost:99999", 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.InitModelsCache(dir)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	gw.ModelsHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from disk cache, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "disk-model") {
+		t.Errorf("expected disk cache body, got: %s", rec.Body.String())
+	}
+	if rec.Header().Get("X-DockMind-Cached") != "true" {
+		t.Error("expected X-DockMind-Cached header")
+	}
+}
+
+func TestModelsHandler_ServesDiskCacheWhenStarting(t *testing.T) {
+	dir := t.TempDir()
+	content := []byte(`{"data":[{"id":"disk-model","object":"model"}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "models.json"), content, 0o644); err != nil {
+		t.Fatalf("write cache file: %v", err)
+	}
+
+	ctrl := newFakeController()
+	ctrl.setState(state.Starting, nil)
+	gw, err := NewGateway("http://localhost:99999", 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.InitModelsCache(dir)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	gw.ModelsHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from disk cache, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "disk-model") {
+		t.Errorf("expected disk cache body, got: %s", rec.Body.String())
+	}
+	if rec.Header().Get("X-DockMind-Cached") != "true" {
+		t.Error("expected X-DockMind-Cached header")
+	}
+}
+
+func TestModelsHandler_CreatesCacheDirOnSave(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested", "cache")
+	modelResponse := `{"data":[{"id":"model-1","object":"model"}]}`
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(modelResponse))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.InitModelsCache(dir)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	gw.ModelsHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	written, err := os.ReadFile(filepath.Join(dir, "models.json"))
+	if err != nil {
+		t.Fatalf("expected cache file created in new directory: %v", err)
+	}
+	if string(written) != modelResponse {
+		t.Errorf("expected file content %q, got %q", modelResponse, written)
+	}
+}
+
+func TestModelCacheStore_SaveSkipsIdenticalContent(t *testing.T) {
+	dir := t.TempDir()
+	store := newModelCacheStore(dir)
+	cache := &modelCache{body: []byte(`{"data":[]}`), contentType: "application/json"}
+
+	if err := store.save(cache); err != nil {
+		t.Fatalf("first save failed: %v", err)
+	}
+	firstHash := store.lastWrittenHash
+
+	if err := store.save(cache); err != nil {
+		t.Fatalf("second save failed: %v", err)
+	}
+	if store.lastWrittenHash != firstHash {
+		t.Error("expected lastWrittenHash unchanged after redundant save")
+	}
+
+	written, err := os.ReadFile(filepath.Join(dir, "models.json"))
+	if err != nil {
+		t.Fatalf("read cache file: %v", err)
+	}
+	if string(written) != string(cache.body) {
+		t.Errorf("expected file content unchanged, got %q", written)
+	}
+}
+
+func TestModelCacheStore_SaveWritesDifferentContent(t *testing.T) {
+	dir := t.TempDir()
+	store := newModelCacheStore(dir)
+	cacheA := &modelCache{body: []byte(`{"data":[{"id":"a"}]}`), contentType: "application/json"}
+	cacheB := &modelCache{body: []byte(`{"data":[{"id":"b"}]}`), contentType: "application/json"}
+
+	if err := store.save(cacheA); err != nil {
+		t.Fatalf("save cacheA failed: %v", err)
+	}
+	if err := store.save(cacheB); err != nil {
+		t.Fatalf("save cacheB failed: %v", err)
+	}
+
+	if store.lastWrittenHash != fnv64(cacheB.body) {
+		t.Error("expected lastWrittenHash updated to cacheB hash")
+	}
+
+	written, err := os.ReadFile(filepath.Join(dir, "models.json"))
+	if err != nil {
+		t.Fatalf("read cache file: %v", err)
+	}
+	if string(written) != string(cacheB.body) {
+		t.Errorf("expected file content %q, got %q", cacheB.body, written)
+	}
+}
+
+func TestModelCacheStore_LoadThenSaveSkipsIdenticalContent(t *testing.T) {
+	dir := t.TempDir()
+	content := []byte(`{"data":[{"id":"a"}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "models.json"), content, 0o644); err != nil {
+		t.Fatalf("write cache file: %v", err)
+	}
+
+	store := newModelCacheStore(dir)
+	cache, err := store.load()
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if cache == nil {
+		t.Fatal("expected cache loaded")
+	}
+	if store.lastWrittenHash != fnv64(content) {
+		t.Error("expected lastWrittenHash set by load")
+	}
+
+	if err := store.save(cache); err != nil {
+		t.Fatalf("save after load failed: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, "models.json"))
+	if err != nil {
+		t.Fatalf("stat cache file: %v", err)
+	}
+	modTime := info.ModTime()
+
+	// Save again with identical content; file should not be rewritten.
+	if err := store.save(cache); err != nil {
+		t.Fatalf("second save failed: %v", err)
+	}
+	info, err = os.Stat(filepath.Join(dir, "models.json"))
+	if err != nil {
+		t.Fatalf("stat cache file after second save: %v", err)
+	}
+	if !info.ModTime().Equal(modTime) {
+		t.Error("expected file not rewritten after load-then-save with identical content")
+	}
+}
+
+func TestModelCacheStore_LoadMissingThenSaveWrites(t *testing.T) {
+	dir := t.TempDir()
+	store := newModelCacheStore(dir)
+	cache, err := store.load()
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if cache != nil {
+		t.Error("expected no cache for missing file")
+	}
+	if store.lastWrittenHash != 0 {
+		t.Error("expected lastWrittenHash zero after missing file load")
+	}
+
+	cache = &modelCache{body: []byte(`{"data":[]}`), contentType: "application/json"}
+	if err := store.save(cache); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+	if store.lastWrittenHash != fnv64(cache.body) {
+		t.Error("expected lastWrittenHash updated after save")
+	}
+
+	written, err := os.ReadFile(filepath.Join(dir, "models.json"))
+	if err != nil {
+		t.Fatalf("read cache file: %v", err)
+	}
+	if string(written) != string(cache.body) {
+		t.Errorf("expected file content %q, got %q", cache.body, written)
+	}
+}
+
+func TestModelsHandler_ConcurrentSavesNoRace(t *testing.T) {
+	dir := t.TempDir()
+	modelResponse := `{"data":[{"id":"model-1","object":"model"}]}`
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(modelResponse))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.InitModelsCache(dir)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			rec := httptest.NewRecorder()
+			gw.ModelsHandler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+		}()
+	}
+	wg.Wait()
+
+	written, err := os.ReadFile(filepath.Join(dir, "models.json"))
+	if err != nil {
+		t.Fatalf("expected cache file written: %v", err)
+	}
+	if string(written) != modelResponse {
+		t.Errorf("expected file content %q, got %q", modelResponse, written)
 	}
 }
 

@@ -330,6 +330,61 @@ gateway:
 				}
 			},
 		},
+		{
+			name: "gateway enabled with modelsCacheDir",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+  backendUrl: http://localhost:1234
+gateway:
+  enabled: true
+  modelsCacheDir: /var/lib/dockmind
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if cfg.Gateway.ModelsCacheDir != "/var/lib/dockmind" {
+					t.Errorf("expected modelsCacheDir /var/lib/dockmind, got %q", cfg.Gateway.ModelsCacheDir)
+				}
+			},
+		},
+		{
+			name: "gateway enabled with modelsCacheDir absent defaults to empty",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+  backendUrl: http://localhost:1234
+gateway:
+  enabled: true
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if cfg.Gateway.ModelsCacheDir != "" {
+					t.Errorf("expected modelsCacheDir empty, got %q", cfg.Gateway.ModelsCacheDir)
+				}
+			},
+		},
+		{
+			name: "gateway disabled with modelsCacheDir ok",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+gateway:
+  enabled: false
+  modelsCacheDir: /var/lib/dockmind
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if cfg.Gateway.ModelsCacheDir != "/var/lib/dockmind" {
+					t.Errorf("expected modelsCacheDir /var/lib/dockmind, got %q", cfg.Gateway.ModelsCacheDir)
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {

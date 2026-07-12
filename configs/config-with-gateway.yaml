@@ -18,3 +18,4 @@ gateway:
   enabled: true
   idleTimeout: 300s
   requestTimeout: 120s
+  modelsCacheDir: /var/lib/dockmind

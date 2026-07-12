@@ -95,3 +95,9 @@
 **Area**: testing / state machine
 **What happened**: When writing tests that drive GPU state manually (e.g., simulating nvidia-smi errors during startup or shutdown), the GPU appeared or disappeared instantly because `fakePower.SetPower` sets `fakeGPU.present = on` whenever `power.gpu` is non-nil. This caused tests to complete without ever hitting the intended error path.
 **Takeaway**: For state tests that need explicit control over `fakeGPU.present` or `fakeGPU.err`, set `power.gpu = nil` to disable the automatic coupling. Drive the GPU fields directly from the test (under `fakeGPU.mu` if accessed concurrently).
+
+## Check story Out of Scope / Notes before acting on reviewer trade-off feedback
+**Date**: 2026-07-12
+**Area**: stories / code review
+**What happened**: The code reviewer flagged non-atomic file writes, content-type inconsistency for disk-loaded caches, and unsynchronized `load()` as real issues. All three were explicitly called out in the story's "Out of Scope" or "Notes" sections as accepted trade-offs (no atomic rename, raw bytes with default `application/json`, `load()` called once at startup before any requests).
+**Takeaway**: When a reviewer points out a design concern, first check the story's "Out of Scope" and "Notes" sections. If the story has already accepted the trade-off, treat it as a requirement, not a defect. Only escalate or fix if the concern is not covered by the story text.

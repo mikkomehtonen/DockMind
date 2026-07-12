@@ -101,6 +101,7 @@ gateway:
   enabled: true
   idleTimeout: 300s
   requestTimeout: 120s
+  modelsCacheDir: /var/lib/dockmind
 llamaSwap:
   healthUrl: http://localhost:1234/v1/models
   backendUrl: http://localhost:1234
@@ -110,7 +111,9 @@ The gateway auto-starts the system on first request, resets the idle timer
 on each new request and when streaming responses close. When the backend is
 unavailable, it returns `503 Service Unavailable` with a `Retry-After` header.
 Cached model lists are served from memory with an `X-DockMind-Cached: true`
-header.
+header. Set `gateway.modelsCacheDir` to a writable directory to persist the
+cached model list across DockMind restarts; leave it unset to keep the cache
+in-memory only.
 
 ## Status Example
 

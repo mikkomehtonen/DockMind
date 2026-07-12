@@ -51,6 +51,7 @@ type GatewayConfig struct {
 	Enabled        bool     `yaml:"enabled"`
 	IdleTimeout    Duration `yaml:"idleTimeout"`
 	RequestTimeout Duration `yaml:"requestTimeout"`
+	ModelsCacheDir string   `yaml:"modelsCacheDir"`
 }
 
 type GPUConfig struct {

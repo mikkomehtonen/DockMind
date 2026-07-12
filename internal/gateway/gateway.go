@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -32,6 +35,62 @@ type modelCache struct {
 	contentType string
 }
 
+// modelCacheStore handles disk persistence for the cached model list.
+type modelCacheStore struct {
+	path            string
+	mu              sync.Mutex
+	lastWrittenHash uint64 // FNV-1a hash of the last content written to disk
+}
+
+func newModelCacheStore(dir string) *modelCacheStore {
+	return &modelCacheStore{
+		path: filepath.Join(dir, "models.json"),
+	}
+}
+
+func fnv64(data []byte) uint64 {
+	h := fnv.New64a()
+	h.Write(data)
+	return h.Sum64()
+}
+
+func (s *modelCacheStore) load() (*modelCache, error) {
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	s.lastWrittenHash = fnv64(data)
+	return &modelCache{
+		body:        data,
+		contentType: "application/json",
+	}, nil
+}
+
+func (s *modelCacheStore) save(cache *modelCache) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	h := fnv64(cache.body)
+	if h == s.lastWrittenHash {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(s.path, cache.body, 0o644); err != nil {
+		return err
+	}
+	s.lastWrittenHash = h
+	return nil
+}
+
 // Gateway handles OpenAI-compatible API reverse proxying with auto-start and idle shutdown.
 type Gateway struct {
 	backendURL     *url.URL
@@ -43,6 +102,7 @@ type Gateway struct {
 	client         *http.Client
 
 	cachedModels atomic.Pointer[modelCache]
+	cacheStore   *modelCacheStore
 
 	// Active request tracking for idle shutdown.
 	activeMu        sync.Mutex
@@ -88,6 +148,24 @@ func NewGatewayWithPollInterval(backendURL string, idleTimeout, requestTimeout, 
 	}
 	gw.pollInterval = pollInterval
 	return gw, nil
+}
+
+// InitModelsCache initializes disk persistence for the cached model list.
+func (g *Gateway) InitModelsCache(dir string) {
+	if dir == "" {
+		g.logger.Warn("gateway modelsCacheDir is not configured; cached model list will not persist across restarts")
+		return
+	}
+	g.cacheStore = newModelCacheStore(dir)
+	cache, err := g.cacheStore.load()
+	if err != nil {
+		g.logger.Warn("failed to load cached models from disk", "error", err, "dir", dir)
+		return
+	}
+	if cache != nil {
+		g.cachedModels.Store(cache)
+		g.logger.Info("loaded cached models from disk")
+	}
 }
 
 // StartIdleWatcher starts the background idle shutdown goroutine.
@@ -276,6 +354,11 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 		contentType: contentType,
 	}
 	g.cachedModels.Store(cache)
+	if g.cacheStore != nil {
+		if err := g.cacheStore.save(cache); err != nil {
+			g.logger.Error("failed to persist cached models to disk", "error", err)
+		}
+	}
 
 	// Now write the cached response to the actual ResponseWriter.
 	for key, values := range bw.header {

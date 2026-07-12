@@ -40,6 +40,7 @@ func TestREADME(t *testing.T) {
 		{"documents gateway /v1/models route", "/v1/models", true},
 		{"documents gateway /v1/chat/completions route", "/v1/chat/completions", true},
 		{"documents gateway configuration section", "gateway", true},
+		{"documents gateway modelsCacheDir", "modelsCacheDir", true},
 		{"documents LOGO_LINK_URL env var", "LOGO_LINK_URL", true},
 		{"status example includes state field", "state", true},
 		{"status example includes gpuPresent field", "gpuPresent", true},

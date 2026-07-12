@@ -23,6 +23,7 @@ provides automatic startup on first request and idle auto-shutdown; see the
 - **Favicon & Logo** — SVG favicon served at `/favicon.svg` and displayed as a logo next to the page title in the web UI; the logo links to a configurable URL via the `LOGO_LINK_URL` environment variable ([006-add-favicon-logo](../stories/006-add-favicon-logo/story.md))
 - **OpenAI Gateway (design)** — design document for an opt-in OpenAI-compatible reverse proxy with automatic startup on first request and idle auto-shutdown ([007-openai-gateway](../stories/007-openai-gateway/story.md))
 - **OpenAI Gateway** — opt-in OpenAI-compatible reverse proxy with automatic startup on first request, model-list caching, and idle auto-shutdown ([008-openai-gateway](../stories/008-openai-gateway/story.md))
+- **Model Cache Persistence** — persist the gateway's cached model list to disk so it survives DockMind restarts; configurable via `gateway.modelsCacheDir` ([010-cache-models-json](../stories/010-cache-models-json/story.md))
 
 ## Non-Goals
 
@@ -40,4 +41,4 @@ provides automatic startup on first request and idle auto-shutdown; see the
 - Docker integration uses the CLI (subprocess), not the Docker Engine API.
 - Error recovery requires manual intervention via `POST /power/off`; there is no automatic retry. If the Shelly plug is unreachable, the system cannot leave the Error state.
 - Single GPU, single inference server, and single Shelly plug only.
-- The OpenAI gateway is opt-in and disabled by default. Enable it via `gateway.enabled: true` in config.yaml. The model-list cache is in-memory only and not persisted across DockMind restarts. See [DockMind_Gateway_Design.md](DockMind_Gateway_Design.md) for the design and architecture details.
+- The OpenAI gateway is opt-in and disabled by default. Enable it via `gateway.enabled: true` in config.yaml. The model-list cache persists to disk only when `gateway.modelsCacheDir` is configured; otherwise it remains in-memory only and a warning is logged on startup. See [DockMind_Gateway_Design.md](DockMind_Gateway_Design.md) for the design and architecture details.
