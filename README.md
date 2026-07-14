@@ -55,6 +55,12 @@ make lint
 | GET | `/` | Responsive web UI for monitoring and controlling DockMind |
 | GET | `/favicon.svg` | SVG favicon for the web UI |
 
+Power endpoints return `202 Accepted` when a transition starts, `200 OK` when
+the system is already in the target state, `409 Conflict` when a transition is
+already in progress or the requested transition is not allowed (e.g. power-on
+from Error), and `429 Too Many Requests` when the request is blocked by an
+active `power.cooldown`.
+
 ### Gateway API (when enabled)
 
 | Method | Path | Description |
@@ -87,7 +93,16 @@ startup:
   timeout: 60s
 shutdown:
   timeout: 30s
+power:
+  cooldown: 0s
 ```
+
+`power.cooldown` sets a minimum delay between power cycles. When set to a
+positive duration, `POST /power/on` is blocked for that long after the system
+reaches Off, and `POST /power/off` is blocked for that long after the system
+reaches Ready. Blocked requests return `429 Too Many Requests`; `GET /status`
+reports the remaining seconds in `cooldownRemaining`. The default is `0s`
+(disabled).
 
 ### Gateway Configuration
 
@@ -115,6 +130,11 @@ header. Set `gateway.modelsCacheDir` to a writable directory to persist the
 cached model list across DockMind restarts; leave it unset to keep the cache
 in-memory only.
 
+When `power.cooldown` is enabled and the gateway is enabled, the effective idle
+shutdown timeout is raised to at least `power.cooldown` so the idle watcher does
+not try to shut down during the post-startup cooldown. A warning is logged when
+this adjustment happens.
+
 ## Status Example
 
 `GET /status` returns:
@@ -127,7 +147,8 @@ in-memory only.
   "shellyOn": true,
   "llamaSwapRunning": true,
   "llamaSwapHealthy": true,
-  "lastError": null
+  "lastError": null,
+  "cooldownRemaining": 0
 }
 ```
 

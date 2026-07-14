@@ -14,5 +14,7 @@ startup:
   timeout: 60s
 shutdown:
   timeout: 30s
+power:
+  cooldown: 0s
 gateway:
   enabled: false

@@ -116,6 +116,8 @@ func (s *Server) handlePowerResult(w http.ResponseWriter, result state.PowerResu
 		w.WriteHeader(http.StatusOK)
 	case state.ResultConflict:
 		w.WriteHeader(http.StatusConflict)
+	case state.ResultCooldown:
+		w.WriteHeader(http.StatusTooManyRequests)
 	default:
 		w.WriteHeader(http.StatusInternalServerError)
 	}

@@ -175,6 +175,17 @@
       display: none;
     }
 
+    .state__cooldown {
+      margin: 0;
+      font-size: var(--fs-sm);
+      color: var(--busy);
+      min-height: 1.25rem;
+    }
+
+    .state__cooldown[hidden] {
+      display: none;
+    }
+
     .actions {
       display: flex;
       flex-direction: column;
@@ -362,6 +373,7 @@
         <span class="state__name" id="state-name">Loading…</span>
       </div>
       <p class="state__feedback" id="feedback" hidden></p>
+      <p class="state__cooldown" id="cooldown" hidden>Cooldown active — <span id="cooldown-time">0</span>s remaining</p>
     </section>
 
     <section class="actions">
@@ -444,6 +456,8 @@
       healthValue: document.getElementById("health-value"),
       errorBanner: document.getElementById("error-banner"),
       errorMessage: document.getElementById("error-message"),
+      cooldown: document.getElementById("cooldown"),
+      cooldownTime: document.getElementById("cooldown-time"),
     };
 
     let pending = false;
@@ -531,10 +545,29 @@
         els.errorMessage.textContent = "";
       }
 
-      const enabled = ENABLED[data.state] || { on: false, off: false, restart: false };
-      els.btnOn.disabled = !enabled.on;
-      els.btnOff.disabled = !enabled.off;
-      els.btnRestart.disabled = !enabled.restart;
+      if (data.cooldownRemaining > 0) {
+        els.cooldown.hidden = false;
+        els.cooldownTime.textContent = Math.ceil(data.cooldownRemaining);
+        if (data.state === "Off") {
+          els.btnOn.disabled = true;
+          els.btnRestart.disabled = true;
+          els.btnOff.disabled = false;
+        } else if (data.state === "Ready") {
+          els.btnOn.disabled = false;
+          els.btnOff.disabled = true;
+          els.btnRestart.disabled = true;
+        } else {
+          els.btnOn.disabled = true;
+          els.btnOff.disabled = true;
+          els.btnRestart.disabled = true;
+        }
+      } else {
+        els.cooldown.hidden = true;
+        const enabled = ENABLED[data.state] || { on: false, off: false, restart: false };
+        els.btnOn.disabled = !enabled.on;
+        els.btnOff.disabled = !enabled.off;
+        els.btnRestart.disabled = !enabled.restart;
+      }
 
       showFeedback("");
     }
@@ -578,6 +611,7 @@
         if (res.status === 202)      showFeedback(label + "…");
         else if (res.status === 200) showFeedback("Already in target state");
         else if (res.status === 409) showFeedback("Not allowed right now");
+        else if (res.status === 429) showFeedback("Cooldown active — please wait");
         else                         showFeedback("Unexpected response");
       } catch (e) {
         showFeedback("Request failed");

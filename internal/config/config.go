@@ -66,6 +66,10 @@ type ShutdownConfig struct {
 	Timeout Duration `yaml:"timeout"`
 }
 
+type PowerConfig struct {
+	Cooldown Duration `yaml:"cooldown"`
+}
+
 type Config struct {
 	Server    ServerConfig    `yaml:"server"`
 	Shelly    ShellyConfig    `yaml:"shelly"`
@@ -75,6 +79,7 @@ type Config struct {
 	Startup   StartupConfig   `yaml:"startup"`
 	Shutdown  ShutdownConfig  `yaml:"shutdown"`
 	Gateway   GatewayConfig   `yaml:"gateway"`
+	Power     PowerConfig     `yaml:"power"`
 }
 
 func Load(path string) (*Config, error) {
@@ -134,6 +139,9 @@ func validate(cfg *Config) error {
 	if cfg.Shutdown.Timeout <= 0 {
 		return errors.New("shutdown.timeout must be positive")
 	}
+	if cfg.Power.Cooldown < 0 {
+		return errors.New("power.cooldown must be >= 0")
+	}
 	if cfg.Gateway.Enabled {
 		if cfg.LlamaSwap.BackendURL == "" {
 			return errors.New("llamaSwap.backendUrl is required when gateway.enabled is true")
@@ -150,4 +158,15 @@ func validate(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+// EffectiveIdleTimeout returns the idle timeout adjusted for cooldown.
+// When idleTimeout > 0 and cooldown > idleTimeout, the effective idle
+// timeout is raised to cooldown (the minimum sensible value). Returns
+// the effective duration and whether it was adjusted.
+func EffectiveIdleTimeout(idleTimeout, cooldown time.Duration) (time.Duration, bool) {
+	if idleTimeout > 0 && cooldown > idleTimeout {
+		return cooldown, true
+	}
+	return idleTimeout, false
 }

@@ -46,15 +46,27 @@ func main() {
 		cfg.GPU.PollInterval.Duration(),
 		cfg.Startup.Timeout.Duration(),
 		cfg.Shutdown.Timeout.Duration(),
+		cfg.Power.Cooldown.Duration(),
 	)
 
 	server := api.NewServer(machine, logger)
 
 	var gw *gateway.Gateway
 	if cfg.Gateway.Enabled {
+		effectiveIdleTimeout, adjusted := config.EffectiveIdleTimeout(
+			cfg.Gateway.IdleTimeout.Duration(),
+			cfg.Power.Cooldown.Duration(),
+		)
+		if adjusted {
+			logger.Warn("gateway.idleTimeout is less than power.cooldown; increasing effective idleTimeout",
+				"configuredIdleTimeout", cfg.Gateway.IdleTimeout.Duration(),
+				"cooldown", cfg.Power.Cooldown.Duration(),
+				"effectiveIdleTimeout", effectiveIdleTimeout,
+			)
+		}
 		gw, err = gateway.NewGatewayWithPollInterval(
 			cfg.LlamaSwap.BackendURL,
-			cfg.Gateway.IdleTimeout.Duration(),
+			effectiveIdleTimeout,
 			cfg.Gateway.RequestTimeout.Duration(),
 			cfg.GPU.PollInterval.Duration(),
 			machine,

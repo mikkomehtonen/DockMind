@@ -42,6 +42,7 @@ const (
 	ResultAccepted PowerResult = iota
 	ResultAlreadyInState
 	ResultConflict
+	ResultCooldown
 )
 
 var ErrBackendError = errors.New("backend in error state")
@@ -66,13 +67,14 @@ type HealthChecker interface {
 }
 
 type StatusResponse struct {
-	State            string  `json:"state"`
-	GPUPresent       bool    `json:"gpuPresent"`
-	GPUName          string  `json:"gpuName"`
-	ShellyOn         bool    `json:"shellyOn"`
-	LlamaSwapRunning bool    `json:"llamaSwapRunning"`
-	LlamaSwapHealthy bool    `json:"llamaSwapHealthy"`
-	LastError        *string `json:"lastError"`
+	State             string  `json:"state"`
+	GPUPresent        bool    `json:"gpuPresent"`
+	GPUName           string  `json:"gpuName"`
+	ShellyOn          bool    `json:"shellyOn"`
+	LlamaSwapRunning  bool    `json:"llamaSwapRunning"`
+	LlamaSwapHealthy  bool    `json:"llamaSwapHealthy"`
+	LastError         *string `json:"lastError"`
+	CooldownRemaining float64 `json:"cooldownRemaining"`
 }
 
 type Machine struct {
@@ -85,16 +87,19 @@ type Machine struct {
 	pollInterval    time.Duration
 	startupTimeout  time.Duration
 	shutdownTimeout time.Duration
+	cooldown        time.Duration
 
-	transitionMu sync.Mutex
-	stateMu      sync.Mutex
-	state        State
-	lastError    error
-	changeCh     chan struct{}
-	wg           sync.WaitGroup
+	transitionMu  sync.Mutex
+	stateMu       sync.Mutex
+	state         State
+	lastError     error
+	lastReadyTime time.Time
+	lastOffTime   time.Time
+	changeCh      chan struct{}
+	wg            sync.WaitGroup
 }
 
-func New(power PowerController, gpu GPUMonitor, docker ContainerController, health HealthChecker, logger *slog.Logger, pollInterval, startupTimeout, shutdownTimeout time.Duration) *Machine {
+func New(power PowerController, gpu GPUMonitor, docker ContainerController, health HealthChecker, logger *slog.Logger, pollInterval, startupTimeout, shutdownTimeout, cooldown time.Duration) *Machine {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -107,6 +112,7 @@ func New(power PowerController, gpu GPUMonitor, docker ContainerController, heal
 		pollInterval:    pollInterval,
 		startupTimeout:  startupTimeout,
 		shutdownTimeout: shutdownTimeout,
+		cooldown:        cooldown,
 		state:           Off,
 		changeCh:        make(chan struct{}),
 	}
@@ -119,6 +125,7 @@ func (m *Machine) PowerOn() PowerResult {
 
 	m.stateMu.Lock()
 	current := m.state
+	inCooldown := m.cooldownActiveLocked(Off)
 	m.stateMu.Unlock()
 
 	switch current {
@@ -129,6 +136,10 @@ func (m *Machine) PowerOn() PowerResult {
 		m.transitionMu.Unlock()
 		return ResultConflict
 	case Off:
+		if inCooldown {
+			m.transitionMu.Unlock()
+			return ResultCooldown
+		}
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
@@ -149,6 +160,7 @@ func (m *Machine) PowerOff() PowerResult {
 
 	m.stateMu.Lock()
 	current := m.state
+	inCooldown := m.cooldownActiveLocked(Ready)
 	m.stateMu.Unlock()
 
 	switch current {
@@ -158,7 +170,13 @@ func (m *Machine) PowerOff() PowerResult {
 	case Starting, ShuttingDown:
 		m.transitionMu.Unlock()
 		return ResultConflict
-	case Ready, Error:
+	case Ready:
+		if inCooldown {
+			m.transitionMu.Unlock()
+			return ResultCooldown
+		}
+		fallthrough
+	case Error:
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
@@ -179,6 +197,7 @@ func (m *Machine) Restart() PowerResult {
 
 	m.stateMu.Lock()
 	current := m.state
+	inCooldown := m.cooldownActiveLocked(current)
 	m.stateMu.Unlock()
 
 	switch current {
@@ -186,6 +205,10 @@ func (m *Machine) Restart() PowerResult {
 		m.transitionMu.Unlock()
 		return ResultConflict
 	case Off, Ready:
+		if inCooldown {
+			m.transitionMu.Unlock()
+			return ResultCooldown
+		}
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
@@ -203,6 +226,8 @@ func (m *Machine) Status() StatusResponse {
 	m.stateMu.Lock()
 	state := m.state
 	lastErr := m.lastError
+
+	cooldownRemaining := m.cooldownRemainingLocked(state).Seconds()
 	m.stateMu.Unlock()
 
 	gpuPresent, gpuName := m.probeGPU()
@@ -223,13 +248,14 @@ func (m *Machine) Status() StatusResponse {
 	}
 
 	return StatusResponse{
-		State:            state.String(),
-		GPUPresent:       gpuPresent,
-		GPUName:          gpuName,
-		ShellyOn:         shellyOn,
-		LlamaSwapRunning: running,
-		LlamaSwapHealthy: healthy,
-		LastError:        lastError,
+		State:             state.String(),
+		GPUPresent:        gpuPresent,
+		GPUName:           gpuName,
+		ShellyOn:          shellyOn,
+		LlamaSwapRunning:  running,
+		LlamaSwapHealthy:  healthy,
+		LastError:         lastError,
+		CooldownRemaining: cooldownRemaining,
 	}
 }
 
@@ -261,9 +287,60 @@ func (m *Machine) setState(s State, err error) {
 	m.stateMu.Lock()
 	m.state = s
 	m.lastError = err
+	if s == Ready {
+		m.lastReadyTime = time.Now()
+	} else if s == Off {
+		m.lastOffTime = time.Now()
+	}
 	close(m.changeCh)
 	m.changeCh = make(chan struct{})
 	m.stateMu.Unlock()
+}
+
+// cooldownActiveLocked reports whether the cooldown for the given stable state
+// is currently active. Caller must hold stateMu.
+func (m *Machine) cooldownActiveLocked(state State) bool {
+	if m.cooldown <= 0 {
+		return false
+	}
+	var lastTime time.Time
+	switch state {
+	case Off:
+		lastTime = m.lastOffTime
+	case Ready:
+		lastTime = m.lastReadyTime
+	default:
+		return false
+	}
+	if lastTime.IsZero() {
+		return false
+	}
+	return time.Since(lastTime) < m.cooldown
+}
+
+// cooldownRemainingLocked returns the remaining cooldown for the given stable
+// state, or 0 if none. Caller must hold stateMu.
+func (m *Machine) cooldownRemainingLocked(state State) time.Duration {
+	if m.cooldown <= 0 {
+		return 0
+	}
+	var lastTime time.Time
+	switch state {
+	case Off:
+		lastTime = m.lastOffTime
+	case Ready:
+		lastTime = m.lastReadyTime
+	default:
+		return 0
+	}
+	if lastTime.IsZero() {
+		return 0
+	}
+	remaining := m.cooldown - time.Since(lastTime)
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
 }
 
 // State returns the current state of the machine.
@@ -271,6 +348,12 @@ func (m *Machine) State() State {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	return m.state
+}
+
+func (m *Machine) offCooldownRemaining() time.Duration {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	return m.cooldownRemainingLocked(Off)
 }
 
 // EnsureReady blocks until the backend is Ready, or an error/context cancellation occurs.
@@ -304,6 +387,18 @@ func (m *Machine) EnsureReady(ctx context.Context) error {
 				case <-ctx.Done():
 					return ctx.Err()
 				}
+			case ResultCooldown:
+				remaining := m.offCooldownRemaining()
+				if remaining > 0 {
+					timer := time.NewTimer(remaining)
+					select {
+					case <-timer.C:
+					case <-ctx.Done():
+						timer.Stop()
+						return ctx.Err()
+					}
+				}
+				continue
 			case ResultConflict, ResultAlreadyInState:
 				continue
 			}

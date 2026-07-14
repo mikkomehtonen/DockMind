@@ -28,6 +28,9 @@ func TestProductDoc(t *testing.T) {
 	if !strings.Contains(body, "010-cache-models-json") {
 		t.Error("docs/product.md Features list does not reference the 010-cache-models-json story")
 	}
+	if !strings.Contains(body, "011-cooldown-protection") {
+		t.Error("docs/product.md Features list does not reference the 011-cooldown-protection story")
+	}
 	if strings.Contains(body, "Web UI, Prometheus metrics, or request queuing during startup") {
 		t.Error("docs/product.md still lists Web UI as a non-goal")
 	}

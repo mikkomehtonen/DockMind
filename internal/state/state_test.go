@@ -156,13 +156,17 @@ func (f *fakeHealth) Check(ctx context.Context) (bool, error) {
 }
 
 func newTestMachine() (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth) {
+	return newTestMachineWithCooldown(0)
+}
+
+func newTestMachineWithCooldown(cooldown time.Duration) (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth) {
 	power := &fakePower{}
 	gpu := &fakeGPU{}
 	power.gpu = gpu
 	docker := &fakeDocker{}
 	health := &fakeHealth{}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	m := New(power, gpu, docker, health, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond)
+	m := New(power, gpu, docker, health, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, cooldown)
 	return m, power, gpu, docker, health
 }
 
@@ -174,7 +178,7 @@ func newTestMachineWithRecorder() (*Machine, *fakePower, *fakeGPU, *fakeDocker, 
 	health := &fakeHealth{}
 	handler := &recordingHandler{}
 	logger := slog.New(handler)
-	m := New(power, gpu, docker, health, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond)
+	m := New(power, gpu, docker, health, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, 0)
 	return m, power, gpu, docker, health, handler
 }
 
@@ -958,5 +962,411 @@ func TestEnsureReady_ConcurrentCalls(t *testing.T) {
 	// (plus any shutdown calls if EnsureReady went through ShuttingDown first, but it shouldn't since we started from Off)
 	if setTrueCount != 1 {
 		t.Errorf("expected exactly 1 power-on call, got %d", setTrueCount)
+	}
+}
+
+func TestCooldown(t *testing.T) {
+	cases := []struct {
+		name         string
+		cooldown     time.Duration
+		state        State
+		setOffTime   bool
+		offTime      time.Time
+		setReadyTime bool
+		readyTime    time.Time
+		action       string
+		want         PowerResult
+		wantState    State
+	}{
+		{
+			name:      "disabled cooldown allows PowerOn from Off",
+			cooldown:  0,
+			state:     Off,
+			action:    "PowerOn",
+			want:      ResultAccepted,
+			wantState: Off,
+		},
+		{
+			name:      "disabled cooldown allows PowerOff from Ready",
+			cooldown:  0,
+			state:     Ready,
+			action:    "PowerOff",
+			want:      ResultAccepted,
+			wantState: Ready,
+		},
+		{
+			name:       "post-shutdown cooldown blocks PowerOn",
+			cooldown:   50 * time.Millisecond,
+			state:      Off,
+			setOffTime: true,
+			offTime:    time.Now(),
+			action:     "PowerOn",
+			want:       ResultCooldown,
+			wantState:  Off,
+		},
+		{
+			name:       "expired post-shutdown cooldown allows PowerOn",
+			cooldown:   50 * time.Millisecond,
+			state:      Off,
+			setOffTime: true,
+			offTime:    time.Now().Add(-51 * time.Millisecond),
+			action:     "PowerOn",
+			want:       ResultAccepted,
+			wantState:  Off,
+		},
+		{
+			name:         "post-startup cooldown blocks PowerOff",
+			cooldown:     50 * time.Millisecond,
+			state:        Ready,
+			setReadyTime: true,
+			readyTime:    time.Now(),
+			action:       "PowerOff",
+			want:         ResultCooldown,
+			wantState:    Ready,
+		},
+		{
+			name:         "expired post-startup cooldown allows PowerOff",
+			cooldown:     50 * time.Millisecond,
+			state:        Ready,
+			setReadyTime: true,
+			readyTime:    time.Now().Add(-51 * time.Millisecond),
+			action:       "PowerOff",
+			want:         ResultAccepted,
+			wantState:    Ready,
+		},
+		{
+			name:      "first startup not blocked when lastOffTime is zero",
+			cooldown:  50 * time.Millisecond,
+			state:     Off,
+			action:    "PowerOn",
+			want:      ResultAccepted,
+			wantState: Off,
+		},
+		{
+			name:         "PowerOff not blocked when lastReadyTime is zero",
+			cooldown:     50 * time.Millisecond,
+			state:        Ready,
+			setReadyTime: false,
+			action:       "PowerOff",
+			want:         ResultAccepted,
+			wantState:    Ready,
+		},
+		{
+			name:         "Error recovery exempt from post-startup cooldown",
+			cooldown:     50 * time.Millisecond,
+			state:        Error,
+			setReadyTime: true,
+			readyTime:    time.Now(),
+			action:       "PowerOff",
+			want:         ResultAccepted,
+			wantState:    Error,
+		},
+		{
+			name:      "PowerOn from Error always conflict",
+			cooldown:  50 * time.Millisecond,
+			state:     Error,
+			action:    "PowerOn",
+			want:      ResultConflict,
+			wantState: Error,
+		},
+		{
+			name:       "post-shutdown cooldown blocks Restart from Off",
+			cooldown:   50 * time.Millisecond,
+			state:      Off,
+			setOffTime: true,
+			offTime:    time.Now(),
+			action:     "Restart",
+			want:       ResultCooldown,
+			wantState:  Off,
+		},
+		{
+			name:         "post-startup cooldown blocks Restart from Ready",
+			cooldown:     50 * time.Millisecond,
+			state:        Ready,
+			setReadyTime: true,
+			readyTime:    time.Now(),
+			action:       "Restart",
+			want:         ResultCooldown,
+			wantState:    Ready,
+		},
+		{
+			name:      "transition in progress takes precedence over cooldown PowerOn",
+			cooldown:  50 * time.Millisecond,
+			state:     Starting,
+			action:    "PowerOn",
+			want:      ResultConflict,
+			wantState: Starting,
+		},
+		{
+			name:      "transition in progress takes precedence over cooldown PowerOff",
+			cooldown:  50 * time.Millisecond,
+			state:     Starting,
+			action:    "PowerOff",
+			want:      ResultConflict,
+			wantState: Starting,
+		},
+		{
+			name:       "already Off returns AlreadyInState despite cooldown",
+			cooldown:   50 * time.Millisecond,
+			state:      Off,
+			setOffTime: true,
+			offTime:    time.Now(),
+			action:     "PowerOff",
+			want:       ResultAlreadyInState,
+			wantState:  Off,
+		},
+		{
+			name:         "already Ready returns AlreadyInState despite cooldown",
+			cooldown:     50 * time.Millisecond,
+			state:        Ready,
+			setReadyTime: true,
+			readyTime:    time.Now(),
+			action:       "PowerOn",
+			want:         ResultAlreadyInState,
+			wantState:    Ready,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, gpu, docker, health := newTestMachineWithCooldown(tc.cooldown)
+			m.stateMu.Lock()
+			m.state = tc.state
+			if tc.setOffTime {
+				m.lastOffTime = tc.offTime
+			}
+			if tc.setReadyTime {
+				m.lastReadyTime = tc.readyTime
+			}
+			m.stateMu.Unlock()
+			gpu.present = true
+			health.healthy = true
+			if tc.state == Ready {
+				docker.running = true
+			}
+
+			var got PowerResult
+			switch tc.action {
+			case "PowerOn":
+				got = m.PowerOn()
+			case "PowerOff":
+				got = m.PowerOff()
+			case "Restart":
+				got = m.Restart()
+			default:
+				t.Fatalf("unknown action %q", tc.action)
+			}
+
+			if got != tc.want {
+				t.Fatalf("expected %v, got %v", tc.want, got)
+			}
+			if got == ResultAccepted {
+				m.Wait()
+				var wantFinal State
+				switch tc.action {
+				case "PowerOn", "Restart":
+					wantFinal = Ready
+				case "PowerOff":
+					wantFinal = Off
+				}
+				if m.State() != wantFinal {
+					t.Fatalf("expected final state %v, got %v", wantFinal, m.State())
+				}
+			} else {
+				if m.State() != tc.wantState {
+					t.Fatalf("expected state %v, got %v", tc.wantState, m.State())
+				}
+			}
+		})
+	}
+}
+
+func TestCooldown_RealStartupBlocksShutdown(t *testing.T) {
+	m, _, gpu, _, health := newTestMachineWithCooldown(50 * time.Millisecond)
+	gpu.present = true
+	health.healthy = true
+
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.State() != Ready {
+		t.Fatalf("expected Ready, got %v", m.State())
+	}
+
+	// Immediate PowerOff should be blocked by post-startup cooldown.
+	if got := m.PowerOff(); got != ResultCooldown {
+		t.Fatalf("expected ResultCooldown, got %v", got)
+	}
+	if m.State() != Ready {
+		t.Fatalf("expected state Ready, got %v", m.State())
+	}
+
+	// Wait for cooldown to expire.
+	time.Sleep(60 * time.Millisecond)
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted after cooldown, got %v", got)
+	}
+	m.Wait()
+
+	if m.State() != Off {
+		t.Fatalf("expected Off, got %v", m.State())
+	}
+
+	// Immediate PowerOn should be blocked by post-shutdown cooldown.
+	if got := m.PowerOn(); got != ResultCooldown {
+		t.Fatalf("expected ResultCooldown, got %v", got)
+	}
+	if m.State() != Off {
+		t.Fatalf("expected state Off, got %v", m.State())
+	}
+}
+
+func TestCooldown_Status(t *testing.T) {
+	cases := []struct {
+		name              string
+		cooldown          time.Duration
+		state             State
+		setOffTime        bool
+		setReadyTime      bool
+		wantRemainingZero bool
+	}{
+		{
+			name:              "Off with active cooldown shows remaining",
+			cooldown:          50 * time.Millisecond,
+			state:             Off,
+			setOffTime:        true,
+			wantRemainingZero: false,
+		},
+		{
+			name:              "Off with expired cooldown shows zero",
+			cooldown:          50 * time.Millisecond,
+			state:             Off,
+			setOffTime:        true,
+			wantRemainingZero: true,
+		},
+		{
+			name:              "Ready with active cooldown shows remaining",
+			cooldown:          50 * time.Millisecond,
+			state:             Ready,
+			setReadyTime:      true,
+			wantRemainingZero: false,
+		},
+		{
+			name:              "Starting shows zero cooldown",
+			cooldown:          50 * time.Millisecond,
+			state:             Starting,
+			wantRemainingZero: true,
+		},
+		{
+			name:              "Error shows zero cooldown",
+			cooldown:          50 * time.Millisecond,
+			state:             Error,
+			wantRemainingZero: true,
+		},
+		{
+			name:              "disabled cooldown shows zero",
+			cooldown:          0,
+			state:             Off,
+			setOffTime:        true,
+			wantRemainingZero: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, _, _, _ := newTestMachineWithCooldown(tc.cooldown)
+			m.stateMu.Lock()
+			m.state = tc.state
+			if tc.setOffTime {
+				if tc.wantRemainingZero {
+					m.lastOffTime = time.Now().Add(-51 * time.Millisecond)
+				} else {
+					m.lastOffTime = time.Now()
+				}
+			}
+			if tc.setReadyTime {
+				if tc.wantRemainingZero {
+					m.lastReadyTime = time.Now().Add(-51 * time.Millisecond)
+				} else {
+					m.lastReadyTime = time.Now()
+				}
+			}
+			m.stateMu.Unlock()
+
+			status := m.Status()
+			if tc.wantRemainingZero {
+				if status.CooldownRemaining != 0 {
+					t.Fatalf("expected cooldownRemaining 0, got %v", status.CooldownRemaining)
+				}
+			} else {
+				if status.CooldownRemaining <= 0 {
+					t.Fatalf("expected positive cooldownRemaining, got %v", status.CooldownRemaining)
+				}
+			}
+		})
+	}
+}
+
+func TestCooldown_EnsureReadyWaits(t *testing.T) {
+	m, _, gpu, _, health := newTestMachineWithCooldown(50 * time.Millisecond)
+	gpu.present = true
+	health.healthy = true
+
+	// Set lastOffTime to now so PowerOn returns ResultCooldown.
+	m.stateMu.Lock()
+	m.lastOffTime = time.Now()
+	m.stateMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := m.EnsureReady(ctx)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if m.State() != Ready {
+		t.Fatalf("expected Ready, got %v", m.State())
+	}
+	if elapsed < 40*time.Millisecond {
+		t.Fatalf("EnsureReady returned too quickly (%v), expected to wait for cooldown", elapsed)
+	}
+}
+
+func TestCooldown_EnsureReadyDeadlineExceeded(t *testing.T) {
+	m, _, gpu, _, health := newTestMachineWithCooldown(50 * time.Millisecond)
+	gpu.present = true
+	health.healthy = true
+
+	m.stateMu.Lock()
+	m.lastOffTime = time.Now()
+	m.stateMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err := m.EnsureReady(ctx)
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+}
+
+func TestCooldown_EnsureReadyCanceled(t *testing.T) {
+	m, _, _, _, _ := newTestMachineWithCooldown(50 * time.Millisecond)
+
+	m.stateMu.Lock()
+	m.lastOffTime = time.Now()
+	m.stateMu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := m.EnsureReady(ctx)
+	if err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }

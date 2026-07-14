@@ -24,6 +24,7 @@ provides automatic startup on first request and idle auto-shutdown; see the
 - **OpenAI Gateway (design)** — design document for an opt-in OpenAI-compatible reverse proxy with automatic startup on first request and idle auto-shutdown ([007-openai-gateway](../stories/007-openai-gateway/story.md))
 - **OpenAI Gateway** — opt-in OpenAI-compatible reverse proxy with automatic startup on first request, model-list caching, and idle auto-shutdown ([008-openai-gateway](../stories/008-openai-gateway/story.md))
 - **Model Cache Persistence** — persist the gateway's cached model list to disk so it survives DockMind restarts; configurable via `gateway.modelsCacheDir` ([010-cache-models-json](../stories/010-cache-models-json/story.md))
+- **Cooldown Protection** — configurable cooldown period (`power.cooldown`, default 0s = disabled) that blocks rapid power cycling: after a shutdown, power-on is blocked for the cooldown duration, and after a startup, power-off is blocked similarly. Blocked requests return 429; `GET /status` reports remaining cooldown time via `cooldownRemaining` ([011-cooldown-protection](../stories/011-cooldown-protection/story.md))
 
 ## Non-Goals
 

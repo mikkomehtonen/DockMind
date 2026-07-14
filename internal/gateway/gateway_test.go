@@ -511,6 +511,42 @@ func TestIdleShutdown(t *testing.T) {
 	}
 }
 
+func TestIdleShutdown_Cooldown(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	ctrl := newFakeController()
+	ctrl.powerOffResult = state.ResultCooldown
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, logger,
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.StartIdleWatcher(context.Background())
+	defer gw.StopIdleWatcher()
+
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now().Add(-100 * time.Millisecond)
+	gw.activeMu.Unlock()
+
+	time.Sleep(200 * time.Millisecond)
+
+	gw.activeMu.Lock()
+	pending := gw.pendingShutdown
+	gw.activeMu.Unlock()
+	if pending {
+		t.Error("expected pendingShutdown to be false after ResultCooldown")
+	}
+
+	logOut := buf.String()
+	if !strings.Contains(logOut, "cooldown") {
+		t.Errorf("expected debug log containing 'cooldown', got: %s", logOut)
+	}
+}
+
 func TestIdleShutdown_Disabled(t *testing.T) {
 	ctrl := newFakeController()
 	gw, err := NewGatewayWithPollInterval(

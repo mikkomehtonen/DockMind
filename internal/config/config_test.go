@@ -16,6 +16,7 @@ func TestLoad(t *testing.T) {
 		content string
 		want    Config
 		wantErr bool
+		errSub  string
 	}{
 		{
 			name: "full config",
@@ -43,6 +44,7 @@ shutdown:
 				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
 				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
 				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second)},
+				Power:     PowerConfig{Cooldown: Duration(0)},
 			},
 		},
 		{
@@ -62,6 +64,7 @@ llamaSwap:
 				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
 				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
 				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second)},
+				Power:     PowerConfig{Cooldown: Duration(0)},
 			},
 		},
 		{
@@ -110,6 +113,84 @@ gpu:
 `,
 			wantErr: true,
 		},
+		{
+			name: "power cooldown 60s",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+power:
+  cooldown: 60s
+`,
+			want: Config{
+				Server:    ServerConfig{Address: ":8080"},
+				Shelly:    ShellyConfig{Address: "192.168.1.50", Channel: 0},
+				Docker:    DockerConfig{Container: "llama-swap"},
+				LlamaSwap: LlamaSwapConfig{HealthURL: "http://localhost:1234/v1/models"},
+				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
+				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
+				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second)},
+				Power:     PowerConfig{Cooldown: Duration(60 * time.Second)},
+			},
+		},
+		{
+			name: "power section absent defaults to zero",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+`,
+			want: Config{
+				Server:    ServerConfig{Address: ":8080"},
+				Shelly:    ShellyConfig{Address: "192.168.1.50", Channel: 0},
+				Docker:    DockerConfig{Container: "llama-swap"},
+				LlamaSwap: LlamaSwapConfig{HealthURL: "http://localhost:1234/v1/models"},
+				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
+				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
+				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second)},
+				Power:     PowerConfig{Cooldown: Duration(0)},
+			},
+		},
+		{
+			name: "power cooldown 0s",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+power:
+  cooldown: 0s
+`,
+			want: Config{
+				Server:    ServerConfig{Address: ":8080"},
+				Shelly:    ShellyConfig{Address: "192.168.1.50", Channel: 0},
+				Docker:    DockerConfig{Container: "llama-swap"},
+				LlamaSwap: LlamaSwapConfig{HealthURL: "http://localhost:1234/v1/models"},
+				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
+				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
+				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second)},
+				Power:     PowerConfig{Cooldown: Duration(0)},
+			},
+		},
+		{
+			name: "negative power cooldown fails",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+power:
+  cooldown: -1s
+`,
+			wantErr: true,
+			errSub:  "power.cooldown",
+		},
 	}
 
 	for _, tc := range cases {
@@ -128,6 +209,9 @@ gpu:
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got nil")
+				}
+				if tc.errSub != "" && !strings.Contains(err.Error(), tc.errSub) {
+					t.Errorf("expected error to contain %q, got: %v", tc.errSub, err)
 				}
 				return
 			}
@@ -161,6 +245,35 @@ llamaSwap:
 	}
 	if cfg.Docker.Container != "llama-swap" {
 		t.Fatalf("expected container llama-swap, got %q", cfg.Docker.Container)
+	}
+}
+
+func TestEffectiveIdleTimeout(t *testing.T) {
+	cases := []struct {
+		name         string
+		idleTimeout  time.Duration
+		cooldown     time.Duration
+		want         time.Duration
+		wantAdjusted bool
+	}{
+		{"idleTimeout less than cooldown", 30 * time.Second, 60 * time.Second, 60 * time.Second, true},
+		{"idleTimeout equal to cooldown", 60 * time.Second, 60 * time.Second, 60 * time.Second, false},
+		{"idleTimeout greater than cooldown", 120 * time.Second, 60 * time.Second, 120 * time.Second, false},
+		{"idleTimeout zero (disabled)", 0, 60 * time.Second, 0, false},
+		{"cooldown zero (disabled)", 30 * time.Second, 0, 30 * time.Second, false},
+		{"both zero", 0, 0, 0, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, adjusted := EffectiveIdleTimeout(tc.idleTimeout, tc.cooldown)
+			if got != tc.want {
+				t.Errorf("EffectiveIdleTimeout(%v, %v) = %v, want %v", tc.idleTimeout, tc.cooldown, got, tc.want)
+			}
+			if adjusted != tc.wantAdjusted {
+				t.Errorf("EffectiveIdleTimeout(%v, %v) adjusted = %v, want %v", tc.idleTimeout, tc.cooldown, adjusted, tc.wantAdjusted)
+			}
+		})
 	}
 }
 

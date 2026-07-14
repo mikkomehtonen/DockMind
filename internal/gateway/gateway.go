@@ -251,6 +251,11 @@ func (g *Gateway) tick(prevReady bool) {
 		switch result {
 		case state.ResultAccepted:
 			g.logger.Info("idle shutdown initiated")
+		case state.ResultCooldown:
+			g.activeMu.Lock()
+			g.pendingShutdown = false
+			g.activeMu.Unlock()
+			g.logger.Debug("idle shutdown deferred due to cooldown")
 		default:
 			g.activeMu.Lock()
 			g.pendingShutdown = false

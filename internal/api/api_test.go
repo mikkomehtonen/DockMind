@@ -127,6 +127,43 @@ func TestRoutes(t *testing.T) {
 			wantStatus: http.StatusConflict,
 		},
 		{
+			name:   "POST /power/on cooldown",
+			method: http.MethodPost,
+			path:   "/power/on",
+			setup: func(f *fakeStateMachine) {
+				f.powerOn = state.ResultCooldown
+			},
+			wantStatus: http.StatusTooManyRequests,
+		},
+		{
+			name:   "POST /power/off cooldown",
+			method: http.MethodPost,
+			path:   "/power/off",
+			setup: func(f *fakeStateMachine) {
+				f.powerOff = state.ResultCooldown
+			},
+			wantStatus: http.StatusTooManyRequests,
+		},
+		{
+			name:   "POST /restart cooldown",
+			method: http.MethodPost,
+			path:   "/restart",
+			setup: func(f *fakeStateMachine) {
+				f.restart = state.ResultCooldown
+			},
+			wantStatus: http.StatusTooManyRequests,
+		},
+		{
+			name:   "GET /status includes cooldownRemaining",
+			method: http.MethodGet,
+			path:   "/status",
+			setup: func(f *fakeStateMachine) {
+				f.status = state.StatusResponse{State: "Ready", CooldownRemaining: 45.5}
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `"cooldownRemaining":45.5`,
+		},
+		{
 			name:          "GET /health",
 			method:        http.MethodGet,
 			path:          "/health",
@@ -260,9 +297,27 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected components.schemas.StatusResponse.properties to be an object")
 		}
-		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "lastError"} {
+		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "lastError", "cooldownRemaining"} {
 			if _, ok := properties[field]; !ok {
 				t.Fatalf("expected StatusResponse properties to contain %q", field)
+			}
+		}
+
+		for _, p := range []string{"/power/on", "/power/off", "/restart"} {
+			pathObj, ok := paths[p].(map[string]any)
+			if !ok {
+				t.Fatalf("expected path %q to be an object", p)
+			}
+			postObj, ok := pathObj["post"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected %q POST to be an object", p)
+			}
+			responses, ok := postObj["responses"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected %q responses to be an object", p)
+			}
+			if _, ok := responses["429"]; !ok {
+				t.Fatalf("expected %q responses to contain 429", p)
 			}
 		}
 
@@ -347,6 +402,9 @@ func TestWebUIRoutes(t *testing.T) {
 			"/favicon.svg",
 			"app__logo",
 			`rel="icon"`,
+			"cooldown",
+			"Cooldown active",
+			"429",
 		} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("expected body to contain %q, got %q", want, body)

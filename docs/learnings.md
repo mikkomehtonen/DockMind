@@ -101,3 +101,15 @@
 **Area**: stories / code review
 **What happened**: The code reviewer flagged non-atomic file writes, content-type inconsistency for disk-loaded caches, and unsynchronized `load()` as real issues. All three were explicitly called out in the story's "Out of Scope" or "Notes" sections as accepted trade-offs (no atomic rename, raw bytes with default `application/json`, `load()` called once at startup before any requests).
 **Takeaway**: When a reviewer points out a design concern, first check the story's "Out of Scope" and "Notes" sections. If the story has already accepted the trade-off, treat it as a requirement, not a defect. Only escalate or fix if the concern is not covered by the story text.
+
+## Table-driven state-machine tests must wait for async transitions before asserting state
+**Date**: 2026-07-14
+**Area**: testing / state machine
+**What happened**: In `TestCooldown`, subtests that expected `ResultAccepted` launched real startup/shutdown goroutines and then immediately asserted the pre-transition state (`Off`/`Ready`). This violated the repo convention to call `m.Wait()` before asserting final state, created a scheduling-order race under `GOMAXPROCS>1`, and caused subtests to run for 500ms each when the fakes were not configured as healthy.
+**Takeaway**: In table-driven state tests, branch on the result: for `ResultAccepted`, call `m.Wait()` and assert the final state (`Ready` after `PowerOn`/`Restart`, `Off` after `PowerOff`); for `ResultAlreadyInState`/`ResultConflict`/`ResultCooldown`, assert the unchanged state immediately. Also configure the fakes (`gpu.present`, `health.healthy`) so async transitions complete quickly when the test does wait.
+
+## `time.Now()` in test-case literals is evaluated at function start, not subtest run
+**Date**: 2026-07-14
+**Area**: testing / timing
+**What happened**: Cooldown tests used `offTime: time.Now()` inside a table-driven test slice literal. When earlier subtests unexpectedly took 500ms because fakes were not healthy, the stored timestamps were stale by the time the cooldown-blocking subtests ran, causing them to see an expired cooldown and fail.
+**Takeaway**: For timing-sensitive table-driven tests, either capture `time.Now()` inside the subtest closure or use durations large enough to survive the full table execution. If async transitions are involved, ensure the fakes are configured to complete promptly so the table does not outlast the cooldown window.

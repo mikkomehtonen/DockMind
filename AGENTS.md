@@ -50,7 +50,7 @@ State machine concurrency: `transitionMu` is acquired with `TryLock()` and held 
 
 ## API / state-machine conventions (non-default)
 
-- HTTP status mapping: `202` = transition initiated (async), `200` = already in target state (idempotent no-op), `409` = conflict (transition in progress or not allowed). POST endpoints return an empty body.
+- HTTP status mapping: `202` = transition initiated (async), `200` = already in target state (idempotent no-op), `409` = conflict (transition in progress or not allowed), `429` = cooldown active (power transition blocked by recent power cycle). POST endpoints return an empty body.
 - `GET /health` always returns 200 — daemon is up, not GPU readiness.
 - From the `Error` state, only `POST /power/off` is accepted; `/power/on` and `/restart` return 409.
 - `POST /restart` is a single atomic async operation (shutdown then startup) holding `transitionMu` for the full duration — not two sequential calls.
