@@ -236,14 +236,14 @@ func (m *Machine) Status() StatusResponse {
 	cooldownRemaining := m.cooldownRemainingLocked(state).Seconds()
 	m.stateMu.Unlock()
 
-	gpuPresent, gpuName := m.probeGPU()
-	shellyOn := m.probeBool("Shelly", func(ctx context.Context) (bool, error) {
+	gpuPresent, gpuName := m.probeGPU(probeFailureExpected(state))
+	shellyOn := m.probeBool("Shelly", false, func(ctx context.Context) (bool, error) {
 		return m.power.IsOn(ctx)
 	})
-	running := m.probeBool("Docker", func(ctx context.Context) (bool, error) {
+	running := m.probeBool("Docker", false, func(ctx context.Context) (bool, error) {
 		return m.docker.IsRunning(ctx)
 	})
-	healthy := m.probeBool("Health", func(ctx context.Context) (bool, error) {
+	healthy := m.probeBool("Health", probeFailureExpected(state), func(ctx context.Context) (bool, error) {
 		return m.health.Check(ctx)
 	})
 
@@ -265,24 +265,36 @@ func (m *Machine) Status() StatusResponse {
 	}
 }
 
-func (m *Machine) probeGPU() (bool, string) {
+func (m *Machine) probeGPU(quietOnFailure bool) (bool, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	present, name, err := m.gpu.Status(ctx)
 	if err != nil {
-		m.logger.Warn("GPU status probe failed", "error", err)
+		if quietOnFailure {
+			m.logger.Debug("GPU status probe failed", "error", err)
+		} else {
+			m.logger.Warn("GPU status probe failed", "error", err)
+		}
 	}
 	return present, name
 }
 
-func (m *Machine) probeBool(name string, fn func(context.Context) (bool, error)) bool {
+func (m *Machine) probeBool(name string, quietOnFailure bool, fn func(context.Context) (bool, error)) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	val, err := fn(ctx)
 	if err != nil {
-		m.logger.Warn(name+" status probe failed", "error", err)
+		if quietOnFailure {
+			m.logger.Debug(name+" status probe failed", "error", err)
+		} else {
+			m.logger.Warn(name+" status probe failed", "error", err)
+		}
 	}
 	return val
+}
+
+func probeFailureExpected(s State) bool {
+	return s == Off || s == Starting || s == ShuttingDown
 }
 
 func (m *Machine) Wait() {

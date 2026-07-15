@@ -97,11 +97,12 @@ func (h *recordingHandler) hasRecord(level slog.Level, msgSubstr string) bool {
 }
 
 type fakeDocker struct {
-	mu       sync.Mutex
-	running  bool
-	startErr error
-	stopErr  error
-	block    chan struct{} // blocks both Start and Stop until closed
+	mu           sync.Mutex
+	running      bool
+	startErr     error
+	stopErr      error
+	isRunningErr error
+	block        chan struct{} // blocks both Start and Stop until closed
 }
 
 func (f *fakeDocker) Start(ctx context.Context) error {
@@ -141,17 +142,24 @@ func (f *fakeDocker) Stop(ctx context.Context) error {
 func (f *fakeDocker) IsRunning(ctx context.Context) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.isRunningErr != nil {
+		return false, f.isRunningErr
+	}
 	return f.running, nil
 }
 
 type fakeHealth struct {
 	mu      sync.Mutex
 	healthy bool
+	err     error
 }
 
 func (f *fakeHealth) Check(ctx context.Context) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.err != nil {
+		return false, f.err
+	}
 	return f.healthy, nil
 }
 
@@ -671,20 +679,93 @@ func TestShutdownGPUErrorGone(t *testing.T) {
 	}
 }
 
-func TestStatusGPUProbeError(t *testing.T) {
-	m, _, gpu, _, _, _, handler := newTestMachineWithRecorder()
-	gpu.err = errors.New("nvidia-smi: command not found")
-
-	status := m.Status()
-
-	if status.GPUPresent {
-		t.Fatalf("expected gpuPresent false, got true")
+func TestStatusProbeLogLevels(t *testing.T) {
+	type stateCase struct {
+		name  string
+		state State
+		quiet bool
 	}
-	if status.GPUName != "" {
-		t.Fatalf("expected empty gpuName, got %q", status.GPUName)
+
+	quietStates := []stateCase{
+		{name: "Off", state: Off, quiet: true},
+		{name: "Starting", state: Starting, quiet: true},
+		{name: "ShuttingDown", state: ShuttingDown, quiet: true},
+		{name: "Ready", state: Ready, quiet: false},
+		{name: "Error", state: Error, quiet: false},
 	}
-	if !handler.hasRecord(slog.LevelWarn, "GPU status probe failed") {
-		t.Fatalf("expected WARN log containing 'GPU status probe failed'")
+
+	loudStates := []stateCase{
+		{name: "Off", state: Off, quiet: false},
+		{name: "Ready", state: Ready, quiet: false},
+	}
+
+	cases := []struct {
+		name       string
+		setErr     func(*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth)
+		assertOK   func(StatusResponse) bool
+		msg        string
+		stateCases []stateCase
+	}{
+		{
+			name: "GPU",
+			setErr: func(_ *Machine, _ *fakePower, gpu *fakeGPU, _ *fakeDocker, _ *fakeHealth) {
+				gpu.err = errors.New("nvidia-smi: command not found")
+			},
+			assertOK:   func(status StatusResponse) bool { return !status.GPUPresent && status.GPUName == "" },
+			msg:        "GPU status probe failed",
+			stateCases: quietStates,
+		},
+		{
+			name: "Health",
+			setErr: func(_ *Machine, _ *fakePower, _ *fakeGPU, _ *fakeDocker, health *fakeHealth) {
+				health.err = errors.New("connection refused")
+			},
+			assertOK:   func(status StatusResponse) bool { return !status.LlamaSwapHealthy },
+			msg:        "Health status probe failed",
+			stateCases: quietStates,
+		},
+		{
+			name: "Shelly",
+			setErr: func(_ *Machine, power *fakePower, _ *fakeGPU, _ *fakeDocker, _ *fakeHealth) {
+				power.isOnErr = errors.New("unreachable")
+			},
+			assertOK:   func(status StatusResponse) bool { return true },
+			msg:        "Shelly status probe failed",
+			stateCases: loudStates,
+		},
+		{
+			name: "Docker",
+			setErr: func(_ *Machine, _ *fakePower, _ *fakeGPU, docker *fakeDocker, _ *fakeHealth) {
+				docker.isRunningErr = errors.New("docker daemon unreachable")
+			},
+			assertOK:   func(status StatusResponse) bool { return true },
+			msg:        "Docker status probe failed",
+			stateCases: loudStates,
+		},
+	}
+
+	for _, probe := range cases {
+		for _, st := range probe.stateCases {
+			t.Run(probe.name+"/"+st.name, func(t *testing.T) {
+				m, power, gpu, docker, health, _, handler := newTestMachineWithRecorder()
+				probe.setErr(m, power, gpu, docker, health)
+				m.stateMu.Lock()
+				m.state = st.state
+				m.stateMu.Unlock()
+
+				status := m.Status()
+
+				if !probe.assertOK(status) {
+					t.Fatalf("unexpected status response: %+v", status)
+				}
+				if got := handler.hasRecord(slog.LevelDebug, probe.msg); got != st.quiet {
+					t.Fatalf("expected DEBUG log present=%v, got %v", st.quiet, got)
+				}
+				if got := handler.hasRecord(slog.LevelWarn, probe.msg); got == st.quiet {
+					t.Fatalf("expected WARN log present=%v, got %v", !st.quiet, got)
+				}
+			})
+		}
 	}
 }
 

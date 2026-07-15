@@ -26,6 +26,7 @@ provides automatic startup on first request and idle auto-shutdown; see the
 - **Model Cache Persistence** — persist the gateway's cached model list to disk so it survives DockMind restarts; configurable via `gateway.modelsCacheDir` ([010-cache-models-json](../stories/010-cache-models-json/story.md))
 - **Cooldown Protection** — configurable cooldown period (`power.cooldown`, default 0s = disabled) that blocks rapid power cycling: after a shutdown, power-on is blocked for the cooldown duration, and after a startup, power-off is blocked similarly. Blocked requests return 429; `GET /status` reports remaining cooldown time via `cooldownRemaining` ([011-cooldown-protection](../stories/011-cooldown-protection/story.md))
 - **eGPU Driver Unbind** — unbinds the NVIDIA driver from the eGPU via `dockmind-egpu-unbind.service` before cutting Shelly power during shutdown, preventing the NVIDIA driver error loop and host hang that occur when power is cut while the driver is still bound. A failed unbind aborts the shutdown to the Error state ([012-egpu-unbind-shutdown](../stories/012-egpu-unbind-shutdown/story.md))
+- **Quiet Probe Warnings** — downgrades GPU and llama-swap health probe failures to `DEBUG` (instead of `WARN`) when the system is in `Off`, `Starting`, or `ShuttingDown` state, since those dependencies are supposed to be unavailable then; Shelly and Docker probe failures remain `WARN` in all states ([013-quiet-off-probe-warnings](../stories/013-quiet-off-probe-warnings/story.md))
 
 ## Non-Goals
 
