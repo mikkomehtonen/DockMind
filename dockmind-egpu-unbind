@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+#
+# Safely unbind the DockMind-managed NVIDIA eGPU before cutting its power.
+#
+# This helper:
+#   1. Finds exactly one expected NVIDIA GPU from sysfs.
+#   2. Optionally unbinds its HDMI/DisplayPort audio function.
+#   3. Unbinds the GPU from the NVIDIA driver.
+#   4. Verifies that both functions are unbound.
+#
+# It does NOT power off the Shelly.
+#
+set -Eeuo pipefail
+
+readonly PCI_DEVICES_DIR="/sys/bus/pci/devices"
+readonly LOCK_FILE="/run/lock/dockmind-egpu-unbind.lock"
+
+# NVIDIA
+readonly EXPECTED_VENDOR="0x10de"
+
+# RTX 5060 Ti GB206, based on your sysfs output.
+readonly EXPECTED_DEVICE="0x2d04"
+
+# PCI base classes.
+readonly DISPLAY_CLASS_PREFIX="0x03"
+readonly AUDIO_CLASS_PREFIX="0x04"
+
+readonly GPU_DRIVER="nvidia"
+readonly AUDIO_DRIVER="snd_hda_intel"
+
+readonly UNBIND_AUDIO="${UNBIND_AUDIO:-1}"
+
+log()
+{
+    printf 'dockmind-egpu-unbind: %s\n' "$*" >&2
+}
+
+die()
+{
+    log "ERROR: $*"
+    exit 1
+}
+
+read_sysfs()
+{
+    local path="$1"
+
+    [[ -r "$path" ]] || return 1
+    tr -d '\n' < "$path"
+}
+
+device_driver()
+{
+    local device_path="$1"
+    local driver_link="${device_path}/driver"
+
+    [[ -L "$driver_link" ]] || return 1
+    basename "$(readlink "$driver_link")"
+}
+
+is_bound()
+{
+    [[ -L "$1/driver" ]]
+}
+
+unbind_device()
+{
+    local device_path="$1"
+    local expected_driver="$2"
+    local bdf
+    local actual_driver
+    local unbind_path
+
+    bdf="$(basename "$device_path")"
+
+    if ! is_bound "$device_path"; then
+        log "$bdf is already unbound"
+        return 0
+    fi
+
+    actual_driver="$(device_driver "$device_path")" ||
+        die "Could not determine driver for $bdf"
+
+    if [[ "$actual_driver" != "$expected_driver" ]]; then
+        die "$bdf is bound to unexpected driver '$actual_driver', expected '$expected_driver'"
+    fi
+
+    unbind_path="/sys/bus/pci/drivers/${actual_driver}/unbind"
+    [[ -w "$unbind_path" ]] ||
+        die "Driver unbind interface is not writable: $unbind_path"
+
+    log "Unbinding $bdf from $actual_driver"
+    printf '%s\n' "$bdf" > "$unbind_path"
+
+    if is_bound "$device_path"; then
+        die "$bdf is still bound after unbind completed"
+    fi
+
+    log "$bdf successfully unbound"
+}
+
+find_gpu()
+{
+    local device_path
+    local vendor
+    local device
+    local class
+    local -a matches=()
+
+    shopt -s nullglob
+
+    for device_path in "${PCI_DEVICES_DIR}"/*; do
+        [[ -d "$device_path" ]] || continue
+
+        vendor="$(read_sysfs "${device_path}/vendor" 2>/dev/null || true)"
+        device="$(read_sysfs "${device_path}/device" 2>/dev/null || true)"
+        class="$(read_sysfs "${device_path}/class" 2>/dev/null || true)"
+
+        [[ "$vendor" == "$EXPECTED_VENDOR" ]] || continue
+        [[ "$device" == "$EXPECTED_DEVICE" ]] || continue
+        [[ "$class" == "${DISPLAY_CLASS_PREFIX}"* ]] || continue
+
+        matches+=("$device_path")
+    done
+
+    case "${#matches[@]}" in
+        0)
+            die "Expected eGPU ${EXPECTED_VENDOR}:${EXPECTED_DEVICE} was not found"
+            ;;
+        1)
+            printf '%s\n' "${matches[0]}"
+            ;;
+        *)
+            die "Found multiple matching eGPUs; refusing to choose one"
+            ;;
+    esac
+}
+
+find_audio_sibling()
+{
+    local gpu_path="$1"
+    local gpu_bdf
+    local slot_prefix
+    local sibling_path
+    local vendor
+    local class
+    local -a matches=()
+
+    gpu_bdf="$(basename "$gpu_path")"
+
+    # 0000:05:00.0 -> 0000:05:00
+    slot_prefix="${gpu_bdf%.*}"
+
+    shopt -s nullglob
+
+    for sibling_path in "${PCI_DEVICES_DIR}/${slot_prefix}".*; do
+        [[ -d "$sibling_path" ]] || continue
+        [[ "$sibling_path" != "$gpu_path" ]] || continue
+
+        vendor="$(read_sysfs "${sibling_path}/vendor" 2>/dev/null || true)"
+        class="$(read_sysfs "${sibling_path}/class" 2>/dev/null || true)"
+
+        [[ "$vendor" == "$EXPECTED_VENDOR" ]] || continue
+        [[ "$class" == "${AUDIO_CLASS_PREFIX}"* ]] || continue
+
+        matches+=("$sibling_path")
+    done
+
+    case "${#matches[@]}" in
+        0)
+            return 1
+            ;;
+        1)
+            printf '%s\n' "${matches[0]}"
+            ;;
+        *)
+            die "Found multiple audio functions for PCI slot $slot_prefix"
+            ;;
+    esac
+}
+
+main()
+{
+    local gpu_path
+    local gpu_bdf
+    local audio_path=""
+
+    [[ "${EUID}" -eq 0 ]] || die "This helper must run as root"
+
+    command -v flock >/dev/null 2>&1 ||
+        die "flock is required"
+
+    mkdir -p "$(dirname "$LOCK_FILE")"
+
+    exec 9>"$LOCK_FILE"
+    flock -n 9 ||
+        die "Another eGPU unbind operation is already running"
+
+    gpu_path="$(find_gpu)"
+    gpu_bdf="$(basename "$gpu_path")"
+
+    log "Found managed eGPU at $gpu_bdf"
+
+    if [[ "$UNBIND_AUDIO" == "1" ]]; then
+        if audio_path="$(find_audio_sibling "$gpu_path")"; then
+            unbind_device "$audio_path" "$AUDIO_DRIVER"
+        else
+            log "No matching HDMI/DisplayPort audio function found"
+        fi
+    else
+        log "Audio unbind disabled"
+    fi
+
+    # GPU is intentionally unbound last.
+    unbind_device "$gpu_path" "$GPU_DRIVER"
+
+    log "eGPU is ready for power-off"
+}
+
+main "$@"

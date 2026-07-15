@@ -1,0 +1,8 @@
+[Unit]
+Description=Unbind DockMind eGPU drivers
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/dockmind-egpu-unbind
+User=root
+Group=root
