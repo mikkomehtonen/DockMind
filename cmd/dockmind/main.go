@@ -18,6 +18,7 @@ import (
 	"github.com/dockmind/dockmind/internal/health"
 	"github.com/dockmind/dockmind/internal/shelly"
 	"github.com/dockmind/dockmind/internal/state"
+	"github.com/dockmind/dockmind/internal/unbind"
 )
 
 func main() {
@@ -36,12 +37,14 @@ func main() {
 	gpuMonitor := gpu.New()
 	dockerClient := docker.New(cfg.Docker.Container)
 	healthClient := health.New(cfg.LlamaSwap.HealthURL)
+	unbindClient := unbind.New()
 
 	machine := state.New(
 		power,
 		gpuMonitor,
 		dockerClient,
 		healthClient,
+		unbindClient,
 		logger,
 		cfg.GPU.PollInterval.Duration(),
 		cfg.Startup.Timeout.Duration(),

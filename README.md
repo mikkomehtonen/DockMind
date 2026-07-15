@@ -48,7 +48,7 @@ make lint
 |--------|------|-------------|
 | GET | `/status` | Current system state and component health |
 | POST | `/power/on` | Power on the eGPU and start `llama-swap` |
-| POST | `/power/off` | Stop `llama-swap` and power off the eGPU |
+| POST | `/power/off` | Stop `llama-swap`, unbind the NVIDIA driver via `dockmind-egpu-unbind.service`, then cut Shelly power. A failed unbind aborts shutdown to Error. |
 | POST | `/restart` | Stop then start the complete system |
 | GET | `/health` | DockMind daemon health (does not indicate GPU readiness) |
 | GET | `/docs` | Interactive Swagger UI for exploring the API |

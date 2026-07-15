@@ -66,6 +66,10 @@ type HealthChecker interface {
 	Check(ctx context.Context) (healthy bool, err error)
 }
 
+type Unbinder interface {
+	Unbind(ctx context.Context) error
+}
+
 type StatusResponse struct {
 	State             string  `json:"state"`
 	GPUPresent        bool    `json:"gpuPresent"`
@@ -78,11 +82,12 @@ type StatusResponse struct {
 }
 
 type Machine struct {
-	power  PowerController
-	gpu    GPUMonitor
-	docker ContainerController
-	health HealthChecker
-	logger *slog.Logger
+	power    PowerController
+	gpu      GPUMonitor
+	docker   ContainerController
+	health   HealthChecker
+	unbinder Unbinder
+	logger   *slog.Logger
 
 	pollInterval    time.Duration
 	startupTimeout  time.Duration
@@ -99,7 +104,7 @@ type Machine struct {
 	wg            sync.WaitGroup
 }
 
-func New(power PowerController, gpu GPUMonitor, docker ContainerController, health HealthChecker, logger *slog.Logger, pollInterval, startupTimeout, shutdownTimeout, cooldown time.Duration) *Machine {
+func New(power PowerController, gpu GPUMonitor, docker ContainerController, health HealthChecker, unbinder Unbinder, logger *slog.Logger, pollInterval, startupTimeout, shutdownTimeout, cooldown time.Duration) *Machine {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -108,6 +113,7 @@ func New(power PowerController, gpu GPUMonitor, docker ContainerController, heal
 		gpu:             gpu,
 		docker:          docker,
 		health:          health,
+		unbinder:        unbinder,
 		logger:          logger,
 		pollInterval:    pollInterval,
 		startupTimeout:  startupTimeout,
@@ -489,6 +495,13 @@ func (m *Machine) shutdown() {
 	}); err != nil {
 		m.setState(Error, fmt.Errorf("llama-swap stop timeout: %w", err))
 		m.logger.Error("llama-swap stop timeout", "error", err)
+		return
+	}
+
+	m.logger.Info("Unbinding eGPU drivers")
+	if err := m.unbinder.Unbind(ctx); err != nil {
+		m.setState(Error, fmt.Errorf("egpu unbind failed: %w", err))
+		m.logger.Error("eGPU unbind failed", "error", err)
 		return
 	}
 

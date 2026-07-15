@@ -155,35 +155,50 @@ func (f *fakeHealth) Check(ctx context.Context) (bool, error) {
 	return f.healthy, nil
 }
 
-func newTestMachine() (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth) {
+type fakeUnbinder struct {
+	mu        sync.Mutex
+	unbindErr error
+	calls     int
+}
+
+func (f *fakeUnbinder) Unbind(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	return f.unbindErr
+}
+
+func newTestMachine() (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth, *fakeUnbinder) {
 	return newTestMachineWithCooldown(0)
 }
 
-func newTestMachineWithCooldown(cooldown time.Duration) (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth) {
+func newTestMachineWithCooldown(cooldown time.Duration) (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth, *fakeUnbinder) {
 	power := &fakePower{}
 	gpu := &fakeGPU{}
 	power.gpu = gpu
 	docker := &fakeDocker{}
 	health := &fakeHealth{}
+	unbinder := &fakeUnbinder{}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	m := New(power, gpu, docker, health, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, cooldown)
-	return m, power, gpu, docker, health
+	m := New(power, gpu, docker, health, unbinder, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, cooldown)
+	return m, power, gpu, docker, health, unbinder
 }
 
-func newTestMachineWithRecorder() (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth, *recordingHandler) {
+func newTestMachineWithRecorder() (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth, *fakeUnbinder, *recordingHandler) {
 	power := &fakePower{}
 	gpu := &fakeGPU{}
 	power.gpu = gpu
 	docker := &fakeDocker{}
 	health := &fakeHealth{}
+	unbinder := &fakeUnbinder{}
 	handler := &recordingHandler{}
 	logger := slog.New(handler)
-	m := New(power, gpu, docker, health, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, 0)
-	return m, power, gpu, docker, health, handler
+	m := New(power, gpu, docker, health, unbinder, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, 0)
+	return m, power, gpu, docker, health, unbinder, handler
 }
 
 func TestPowerOnFromOff(t *testing.T) {
-	m, _, gpu, docker, health := newTestMachine()
+	m, _, gpu, docker, health, _ := newTestMachine()
 	gpu.present = true
 	gpu.name = "NVIDIA GeForce RTX 5060 Ti"
 	health.healthy = true
@@ -205,7 +220,7 @@ func TestPowerOnFromOff(t *testing.T) {
 }
 
 func TestPowerOnAlreadyReady(t *testing.T) {
-	m, _, _, _, _ := newTestMachine()
+	m, _, _, _, _, _ := newTestMachine()
 	m.state = Ready
 
 	if got := m.PowerOn(); got != ResultAlreadyInState {
@@ -217,7 +232,7 @@ func TestPowerOnAlreadyReady(t *testing.T) {
 }
 
 func TestPowerOnFromError(t *testing.T) {
-	m, _, _, _, _ := newTestMachine()
+	m, _, _, _, _, _ := newTestMachine()
 	m.state = Error
 
 	if got := m.PowerOn(); got != ResultConflict {
@@ -226,7 +241,7 @@ func TestPowerOnFromError(t *testing.T) {
 }
 
 func TestPowerOffFromReady(t *testing.T) {
-	m, power, gpu, docker, _ := newTestMachine()
+	m, power, gpu, docker, _, _ := newTestMachine()
 	m.state = Ready
 	power.on = true
 	gpu.present = true
@@ -249,7 +264,7 @@ func TestPowerOffFromReady(t *testing.T) {
 }
 
 func TestPowerOffFromError(t *testing.T) {
-	m, power, gpu, docker, _ := newTestMachine()
+	m, power, gpu, docker, _, _ := newTestMachine()
 	m.state = Error
 	m.lastError = errors.New("previous error")
 	power.on = true
@@ -270,7 +285,7 @@ func TestPowerOffFromError(t *testing.T) {
 }
 
 func TestPowerOffAlreadyOff(t *testing.T) {
-	m, _, _, _, _ := newTestMachine()
+	m, _, _, _, _, _ := newTestMachine()
 
 	if got := m.PowerOff(); got != ResultAlreadyInState {
 		t.Fatalf("expected ResultAlreadyInState, got %v", got)
@@ -278,7 +293,7 @@ func TestPowerOffAlreadyOff(t *testing.T) {
 }
 
 func TestRestartFromOff(t *testing.T) {
-	m, _, gpu, docker, health := newTestMachine()
+	m, _, gpu, docker, health, _ := newTestMachine()
 	gpu.present = true
 	health.healthy = true
 
@@ -296,7 +311,7 @@ func TestRestartFromOff(t *testing.T) {
 }
 
 func TestRestartFromReady(t *testing.T) {
-	m, power, gpu, docker, health := newTestMachine()
+	m, power, gpu, docker, health, _ := newTestMachine()
 	m.state = Ready
 	power.on = true
 	gpu.present = true
@@ -317,7 +332,7 @@ func TestRestartFromReady(t *testing.T) {
 }
 
 func TestRestartFromError(t *testing.T) {
-	m, _, _, _, _ := newTestMachine()
+	m, _, _, _, _, _ := newTestMachine()
 	m.state = Error
 
 	if got := m.Restart(); got != ResultConflict {
@@ -326,7 +341,7 @@ func TestRestartFromError(t *testing.T) {
 }
 
 func TestStartupShellyError(t *testing.T) {
-	m, power, _, _, _ := newTestMachine()
+	m, power, _, _, _, _ := newTestMachine()
 	power.setErr = errors.New("connection refused")
 
 	m.PowerOn()
@@ -341,7 +356,7 @@ func TestStartupShellyError(t *testing.T) {
 }
 
 func TestStartupGPUTimeout(t *testing.T) {
-	m, power, gpu, _, _ := newTestMachine()
+	m, power, gpu, _, _, _ := newTestMachine()
 	gpu.present = false
 	// Prevent SetPower from changing the GPU state.
 	power.gpu = nil
@@ -359,7 +374,7 @@ func TestStartupGPUTimeout(t *testing.T) {
 }
 
 func TestStartupDockerError(t *testing.T) {
-	m, _, gpu, docker, _ := newTestMachine()
+	m, _, gpu, docker, _, _ := newTestMachine()
 	gpu.present = true
 	docker.startErr = errors.New("docker error")
 
@@ -375,7 +390,7 @@ func TestStartupDockerError(t *testing.T) {
 }
 
 func TestStartupHealthTimeout(t *testing.T) {
-	m, _, gpu, docker, health := newTestMachine()
+	m, _, gpu, docker, health, _ := newTestMachine()
 	gpu.present = true
 	health.healthy = false
 
@@ -392,7 +407,7 @@ func TestStartupHealthTimeout(t *testing.T) {
 }
 
 func TestShutdownDockerError(t *testing.T) {
-	m, _, _, docker, _ := newTestMachine()
+	m, _, _, docker, _, _ := newTestMachine()
 	m.state = Ready
 	docker.running = true
 	docker.stopErr = errors.New("docker stop error")
@@ -409,7 +424,7 @@ func TestShutdownDockerError(t *testing.T) {
 }
 
 func TestShutdownShellyError(t *testing.T) {
-	m, power, gpu, docker, _ := newTestMachine()
+	m, power, gpu, docker, _, _ := newTestMachine()
 	m.state = Ready
 	power.on = true
 	gpu.present = true
@@ -428,7 +443,7 @@ func TestShutdownShellyError(t *testing.T) {
 }
 
 func TestShutdownGPUTimeout(t *testing.T) {
-	m, power, gpu, docker, _ := newTestMachine()
+	m, power, gpu, docker, _, _ := newTestMachine()
 	m.state = Ready
 	power.on = true
 	gpu.present = true
@@ -445,8 +460,118 @@ func TestShutdownGPUTimeout(t *testing.T) {
 	assertLastErrorContains(t, m.lastError, "gpu", "timeout")
 }
 
+func TestShutdownUnbindSuccess(t *testing.T) {
+	m, power, gpu, docker, _, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off, got %v", m.state)
+	}
+	if m.lastError != nil {
+		t.Fatalf("expected no lastError, got %v", m.lastError)
+	}
+	if power.on {
+		t.Fatalf("expected power off")
+	}
+	if unbinder.calls != 1 {
+		t.Fatalf("expected unbind called once, got %d", unbinder.calls)
+	}
+}
+
+func TestShutdownUnbindError(t *testing.T) {
+	m, power, gpu, docker, _, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	unbinder.unbindErr = errors.New("sudo failed")
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Error {
+		t.Fatalf("expected Error, got %v", m.state)
+	}
+	assertLastErrorContains(t, m.lastError, "unbind")
+	if !power.on {
+		t.Fatalf("expected power to remain on when unbind fails")
+	}
+	if unbinder.calls != 1 {
+		t.Fatalf("expected unbind called once, got %d", unbinder.calls)
+	}
+}
+
+func TestShutdownUnbindNotCalledWhenDockerStopFails(t *testing.T) {
+	m, _, _, docker, _, unbinder := newTestMachine()
+	m.state = Ready
+	docker.running = true
+	docker.stopErr = errors.New("docker stop error")
+
+	m.PowerOff()
+	m.Wait()
+
+	if m.state != Error {
+		t.Fatalf("expected Error, got %v", m.state)
+	}
+	if unbinder.calls != 0 {
+		t.Fatalf("expected unbind not called, got %d", unbinder.calls)
+	}
+}
+
+func TestRestartCallsUnbind(t *testing.T) {
+	m, power, gpu, docker, health, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	health.healthy = true
+
+	if got := m.Restart(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready, got %v", m.state)
+	}
+	if unbinder.calls != 1 {
+		t.Fatalf("expected unbind called once during restart shutdown, got %d", unbinder.calls)
+	}
+}
+
+func TestShutdownFromErrorCallsUnbind(t *testing.T) {
+	m, power, gpu, docker, _, unbinder := newTestMachine()
+	m.state = Error
+	m.lastError = errors.New("previous error")
+	power.on = true
+	gpu.present = true
+	docker.running = true
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off, got %v", m.state)
+	}
+	if unbinder.calls != 1 {
+		t.Fatalf("expected unbind called once during error-recovery shutdown, got %d", unbinder.calls)
+	}
+}
+
 func TestStartupGPUErrorThenPresent(t *testing.T) {
-	m, power, gpu, docker, health, handler := newTestMachineWithRecorder()
+	m, power, gpu, docker, health, _, handler := newTestMachineWithRecorder()
 	gpu.err = errors.New("nvidia-smi: command not found")
 	// Prevent SetPower from changing the GPU state; we drive it manually.
 	power.gpu = nil
@@ -480,7 +605,7 @@ func TestStartupGPUErrorThenPresent(t *testing.T) {
 }
 
 func TestStartupGPUErrorTimeout(t *testing.T) {
-	m, power, gpu, _, _, handler := newTestMachineWithRecorder()
+	m, power, gpu, _, _, _, handler := newTestMachineWithRecorder()
 	gpu.err = errors.New("nvidia-smi: command not found")
 	// Prevent SetPower from changing the GPU state.
 	power.gpu = nil
@@ -500,7 +625,7 @@ func TestStartupGPUErrorTimeout(t *testing.T) {
 }
 
 func TestShutdownGPUErrorGone(t *testing.T) {
-	m, power, gpu, docker, _, handler := newTestMachineWithRecorder()
+	m, power, gpu, docker, _, _, handler := newTestMachineWithRecorder()
 	m.state = Ready
 	power.on = true
 	gpu.present = true
@@ -547,7 +672,7 @@ func TestShutdownGPUErrorGone(t *testing.T) {
 }
 
 func TestStatusGPUProbeError(t *testing.T) {
-	m, _, gpu, _, _, handler := newTestMachineWithRecorder()
+	m, _, gpu, _, _, _, handler := newTestMachineWithRecorder()
 	gpu.err = errors.New("nvidia-smi: command not found")
 
 	status := m.Status()
@@ -564,7 +689,7 @@ func TestStatusGPUProbeError(t *testing.T) {
 }
 
 func TestConcurrentTransitions(t *testing.T) {
-	m, power, _, _, _ := newTestMachine()
+	m, power, _, _, _, _ := newTestMachine()
 	// Block SetPower so the startup transition stays in progress.
 	power.block = make(chan struct{})
 
@@ -585,7 +710,7 @@ func TestConcurrentTransitions(t *testing.T) {
 }
 
 func TestShutdownConcurrentTransitions(t *testing.T) {
-	m, power, gpu, docker, _ := newTestMachine()
+	m, power, gpu, docker, _, _ := newTestMachine()
 	m.state = Ready
 	power.on = true
 	gpu.present = true
@@ -650,7 +775,7 @@ func TestStatus(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m, power, gpu, docker, health := newTestMachine()
+			m, power, gpu, docker, health, _ := newTestMachine()
 			m.state = tc.state
 			m.lastError = tc.lastError
 			gpu.present = tc.gpuPresent
@@ -702,7 +827,7 @@ func assertLastErrorContains(t *testing.T, err error, substrs ...string) {
 }
 
 func TestState(t *testing.T) {
-	m, _, _, _, _ := newTestMachine()
+	m, _, _, _, _, _ := newTestMachine()
 
 	cases := []struct {
 		state State
@@ -730,7 +855,7 @@ func TestState(t *testing.T) {
 }
 
 func TestEnsureReady_WhenReady(t *testing.T) {
-	m, _, gpu, _, health := newTestMachine()
+	m, _, gpu, _, health, _ := newTestMachine()
 	gpu.present = true
 	health.healthy = true
 
@@ -748,7 +873,7 @@ func TestEnsureReady_WhenReady(t *testing.T) {
 }
 
 func TestEnsureReady_WhenError(t *testing.T) {
-	m, _, _, _, _ := newTestMachine()
+	m, _, _, _, _, _ := newTestMachine()
 
 	// Set state to Error with a lastError
 	lastErr := errors.New("gpu timeout")
@@ -770,7 +895,7 @@ func TestEnsureReady_WhenError(t *testing.T) {
 }
 
 func TestEnsureReady_WhenOff(t *testing.T) {
-	m, _, gpu, _, health := newTestMachine()
+	m, _, gpu, _, health, _ := newTestMachine()
 	gpu.present = true
 	health.healthy = true
 
@@ -787,7 +912,7 @@ func TestEnsureReady_WhenOff(t *testing.T) {
 }
 
 func TestEnsureReady_WhenStarting(t *testing.T) {
-	m, _, gpu, docker, health := newTestMachine()
+	m, _, gpu, docker, health, _ := newTestMachine()
 	gpu.present = true
 	health.healthy = true
 
@@ -829,7 +954,7 @@ func TestEnsureReady_WhenStarting(t *testing.T) {
 }
 
 func TestEnsureReady_WhenShuttingDown(t *testing.T) {
-	m, _, gpu, docker, health := newTestMachine()
+	m, _, gpu, docker, health, _ := newTestMachine()
 	gpu.present = true
 	health.healthy = true
 
@@ -877,7 +1002,7 @@ func TestEnsureReady_WhenShuttingDown(t *testing.T) {
 }
 
 func TestEnsureReady_ContextCanceled(t *testing.T) {
-	m, _, _, _, _ := newTestMachine()
+	m, _, _, _, _, _ := newTestMachine()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -892,7 +1017,7 @@ func TestEnsureReady_ContextCanceled(t *testing.T) {
 }
 
 func TestEnsureReady_ContextDeadlineExceeded(t *testing.T) {
-	m, _, gpu, docker, health := newTestMachine()
+	m, _, gpu, docker, health, _ := newTestMachine()
 	gpu.present = true
 	health.healthy = true
 
@@ -914,7 +1039,7 @@ func TestEnsureReady_ContextDeadlineExceeded(t *testing.T) {
 }
 
 func TestEnsureReady_ConcurrentCalls(t *testing.T) {
-	m, _, gpu, _, health := newTestMachine()
+	m, _, gpu, _, health, _ := newTestMachine()
 	gpu.present = true
 	health.healthy = true
 
@@ -1129,7 +1254,7 @@ func TestCooldown(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m, _, gpu, docker, health := newTestMachineWithCooldown(tc.cooldown)
+			m, _, gpu, docker, health, _ := newTestMachineWithCooldown(tc.cooldown)
 			m.stateMu.Lock()
 			m.state = tc.state
 			if tc.setOffTime {
@@ -1182,7 +1307,7 @@ func TestCooldown(t *testing.T) {
 }
 
 func TestCooldown_RealStartupBlocksShutdown(t *testing.T) {
-	m, _, gpu, _, health := newTestMachineWithCooldown(50 * time.Millisecond)
+	m, _, gpu, _, health, _ := newTestMachineWithCooldown(50 * time.Millisecond)
 	gpu.present = true
 	health.healthy = true
 
@@ -1276,7 +1401,7 @@ func TestCooldown_Status(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m, _, _, _, _ := newTestMachineWithCooldown(tc.cooldown)
+			m, _, _, _, _, _ := newTestMachineWithCooldown(tc.cooldown)
 			m.stateMu.Lock()
 			m.state = tc.state
 			if tc.setOffTime {
@@ -1310,7 +1435,7 @@ func TestCooldown_Status(t *testing.T) {
 }
 
 func TestCooldown_EnsureReadyWaits(t *testing.T) {
-	m, _, gpu, _, health := newTestMachineWithCooldown(50 * time.Millisecond)
+	m, _, gpu, _, health, _ := newTestMachineWithCooldown(50 * time.Millisecond)
 	gpu.present = true
 	health.healthy = true
 
@@ -1338,7 +1463,7 @@ func TestCooldown_EnsureReadyWaits(t *testing.T) {
 }
 
 func TestCooldown_EnsureReadyDeadlineExceeded(t *testing.T) {
-	m, _, gpu, _, health := newTestMachineWithCooldown(50 * time.Millisecond)
+	m, _, gpu, _, health, _ := newTestMachineWithCooldown(50 * time.Millisecond)
 	gpu.present = true
 	health.healthy = true
 
@@ -1356,7 +1481,7 @@ func TestCooldown_EnsureReadyDeadlineExceeded(t *testing.T) {
 }
 
 func TestCooldown_EnsureReadyCanceled(t *testing.T) {
-	m, _, _, _, _ := newTestMachineWithCooldown(50 * time.Millisecond)
+	m, _, _, _, _, _ := newTestMachineWithCooldown(50 * time.Millisecond)
 
 	m.stateMu.Lock()
 	m.lastOffTime = time.Now()
