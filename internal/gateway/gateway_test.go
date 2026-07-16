@@ -1639,6 +1639,298 @@ func TestModelsHandler_ConcurrentSavesNoRace(t *testing.T) {
 	}
 }
 
+func TestModelsRefresher_UpdatesCache(t *testing.T) {
+	modelResponse := `{"data":[{"id":"refreshed-model","object":"model"}]}`
+	var callCount int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			callCount++
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(modelResponse))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.SetModelsRefreshInterval(10 * time.Millisecond)
+	gw.StartModelsRefresher(context.Background())
+	defer gw.StopModelsRefresher()
+
+	// Wait for at least one refresh tick.
+	time.Sleep(50 * time.Millisecond)
+
+	if callCount == 0 {
+		t.Fatal("expected at least one /v1/models refresh request")
+	}
+	cached := gw.cachedModels.Load()
+	if cached == nil || !strings.Contains(string(cached.body), "refreshed-model") {
+		t.Fatalf("expected cache updated with refreshed model, got %v", cached)
+	}
+}
+
+func TestModelsRefresher_PersistsToDisk(t *testing.T) {
+	dir := t.TempDir()
+	modelResponse := `{"data":[{"id":"refreshed-model","object":"model"}]}`
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(modelResponse))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.InitModelsCache(dir)
+	gw.SetModelsRefreshInterval(10 * time.Millisecond)
+	gw.StartModelsRefresher(context.Background())
+	defer gw.StopModelsRefresher()
+
+	time.Sleep(50 * time.Millisecond)
+
+	written, err := os.ReadFile(filepath.Join(dir, "models.json"))
+	if err != nil {
+		t.Fatalf("expected cache file written: %v", err)
+	}
+	if string(written) != modelResponse {
+		t.Errorf("expected file content %q, got %q", modelResponse, written)
+	}
+}
+
+func TestModelsRefresher_SkipsWhenOff(t *testing.T) {
+	var callCount int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			callCount++
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	ctrl.setState(state.Off, nil)
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.SetModelsRefreshInterval(10 * time.Millisecond)
+	gw.StartModelsRefresher(context.Background())
+	defer gw.StopModelsRefresher()
+
+	oldCache := []byte(`{"data":[{"id":"old-model","object":"model"}]}`)
+	gw.cachedModels.Store(&modelCache{body: oldCache, contentType: "application/json"})
+
+	time.Sleep(50 * time.Millisecond)
+
+	if callCount != 0 {
+		t.Errorf("expected no /v1/models refresh requests when Off, got %d", callCount)
+	}
+	cached := gw.cachedModels.Load()
+	if cached == nil || !strings.Contains(string(cached.body), "old-model") {
+		t.Error("expected cache unchanged when Off")
+	}
+}
+
+func TestModelsRefresher_SkipsOnBackend500(t *testing.T) {
+	var callCount int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			callCount++
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.SetModelsRefreshInterval(10 * time.Millisecond)
+	gw.StartModelsRefresher(context.Background())
+	defer gw.StopModelsRefresher()
+
+	oldCache := []byte(`{"data":[{"id":"old-model","object":"model"}]}`)
+	gw.cachedModels.Store(&modelCache{body: oldCache, contentType: "application/json"})
+
+	time.Sleep(50 * time.Millisecond)
+
+	if callCount == 0 {
+		t.Fatal("expected at least one /v1/models refresh request")
+	}
+	cached := gw.cachedModels.Load()
+	if cached == nil || !strings.Contains(string(cached.body), "old-model") {
+		t.Error("expected cache unchanged after backend 500")
+	}
+}
+
+func TestModelsRefresher_SkipsOnUnreachableBackend(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGateway("http://localhost:99999", 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.SetModelsRefreshInterval(10 * time.Millisecond)
+	gw.StartModelsRefresher(context.Background())
+	defer gw.StopModelsRefresher()
+
+	oldCache := []byte(`{"data":[{"id":"old-model","object":"model"}]}`)
+	gw.cachedModels.Store(&modelCache{body: oldCache, contentType: "application/json"})
+
+	time.Sleep(50 * time.Millisecond)
+
+	cached := gw.cachedModels.Load()
+	if cached == nil || !strings.Contains(string(cached.body), "old-model") {
+		t.Error("expected cache unchanged when backend unreachable")
+	}
+}
+
+func TestModelsRefresher_StopPreventsFurtherRefreshes(t *testing.T) {
+	block := make(chan struct{})
+	var callCount int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			callCount++
+			<-block
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":[]}`))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.SetModelsRefreshInterval(10 * time.Millisecond)
+	gw.StartModelsRefresher(context.Background())
+
+	// Wait for the first refresh request to be in-flight and blocked.
+	for {
+		if callCount > 0 {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// Allow the in-flight request to complete, then stop immediately.
+	close(block)
+	gw.StopModelsRefresher()
+
+	callsBefore := callCount
+
+	// Wait long enough that another tick would have fired if the refresher were still running.
+	time.Sleep(50 * time.Millisecond)
+
+	if callCount != callsBefore {
+		t.Errorf("expected no additional refresh requests after stop, got %d before and %d after", callsBefore, callCount)
+	}
+}
+
+func TestModelsRefresher_DisabledWhenIntervalZero(t *testing.T) {
+	var callCount int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			callCount++
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":[]}`))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.SetModelsRefreshInterval(0)
+	gw.StartModelsRefresher(context.Background())
+	defer gw.StopModelsRefresher()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if callCount != 0 {
+		t.Errorf("expected no refresh requests when interval is 0, got %d", callCount)
+	}
+}
+
+func TestModelsRefresher_StopCancelsInFlightRequest(t *testing.T) {
+	block := make(chan struct{})
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			<-block // Block until test signals cleanup.
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":[]}`))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGateway(backend.URL, 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.SetModelsRefreshInterval(10 * time.Millisecond)
+	gw.StartModelsRefresher(context.Background())
+
+	// Give the refresh request time to reach the blocked backend handler.
+	time.Sleep(30 * time.Millisecond)
+
+	start := time.Now()
+	gw.StopModelsRefresher()
+	elapsed := time.Since(start)
+
+	// Unblock the backend so the test server can shut down cleanly.
+	close(block)
+
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("expected StopModelsRefresher to return promptly when a refresh is in-flight, took %v", elapsed)
+	}
+}
+
+func TestModelsRefresher_DoesNotPreventIdleShutdown(t *testing.T) {
+	modelResponse := `{"data":[{"id":"model-1","object":"model"}]}`
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(modelResponse))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	gw, err := NewGatewayWithPollInterval(
+		backend.URL, 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	gw.SetModelsRefreshInterval(10 * time.Millisecond)
+	gw.StartModelsRefresher(context.Background())
+	defer gw.StopModelsRefresher()
+	gw.StartIdleWatcher(context.Background())
+	defer gw.StopIdleWatcher()
+
+	// Set lastActivity far in the past so idle timeout should fire.
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now().Add(-100 * time.Millisecond)
+	gw.activeMu.Unlock()
+
+	time.Sleep(200 * time.Millisecond)
+
+	ctrl.mu.Lock()
+	calls := ctrl.powerOffCalls
+	ctrl.mu.Unlock()
+	if calls == 0 {
+		t.Error("expected PowerOff called after idle timeout despite refresher ticks")
+	}
+}
+
 func TestFullGatewayFlow(t *testing.T) {
 	var requestCount int
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

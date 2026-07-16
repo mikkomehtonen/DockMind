@@ -81,6 +81,8 @@ func main() {
 		}
 		gw.InitModelsCache(cfg.Gateway.ModelsCacheDir)
 		server.SetGatewayHandlers(gw.Handler(), gw.ModelsHandler())
+		gw.SetModelsRefreshInterval(cfg.Gateway.ModelsRefreshInterval.Duration())
+		gw.StartModelsRefresher(context.Background())
 		gw.StartIdleWatcher(context.Background())
 	}
 
@@ -105,6 +107,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if gw != nil {
+		gw.StopModelsRefresher()
 		gw.StopIdleWatcher()
 	}
 	if err := httpServer.Shutdown(ctx); err != nil {

@@ -530,7 +530,11 @@
         els.healthValue.textContent = "Stopped";
         els.healthDot.className = "component__dot";
       } else if (data.llamaSwapHealthy) {
-        els.healthValue.textContent = "Healthy";
+        if (data.loadedModels && data.loadedModels.length > 0) {
+          els.healthValue.textContent = data.loadedModels.join(", ");
+        } else {
+          els.healthValue.textContent = "Healthy";
+        }
         els.healthDot.className = "component__dot is-on";
       } else {
         els.healthValue.textContent = "Unhealthy";

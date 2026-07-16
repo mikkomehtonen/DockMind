@@ -167,6 +167,11 @@
           "llamaSwapHealthy": {
             "type": "boolean"
           },
+          "loadedModels": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Models currently loaded in llama-swap, extracted from the /running endpoint. Empty array when no models are loaded or the service is unhealthy."
+          },
           "lastError": {
             "type": "string",
             "nullable": true

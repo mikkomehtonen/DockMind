@@ -48,10 +48,11 @@ type LlamaSwapConfig struct {
 }
 
 type GatewayConfig struct {
-	Enabled        bool     `yaml:"enabled"`
-	IdleTimeout    Duration `yaml:"idleTimeout"`
-	RequestTimeout Duration `yaml:"requestTimeout"`
-	ModelsCacheDir string   `yaml:"modelsCacheDir"`
+	Enabled               bool     `yaml:"enabled"`
+	IdleTimeout           Duration `yaml:"idleTimeout"`
+	RequestTimeout        Duration `yaml:"requestTimeout"`
+	ModelsCacheDir        string   `yaml:"modelsCacheDir"`
+	ModelsRefreshInterval Duration `yaml:"modelsRefreshInterval"`
 }
 
 type GPUConfig struct {
@@ -118,6 +119,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Gateway.Enabled && cfg.Gateway.RequestTimeout == 0 {
 		cfg.Gateway.RequestTimeout = Duration(120 * time.Second)
 	}
+	if cfg.Gateway.Enabled && cfg.Gateway.ModelsRefreshInterval == 0 {
+		cfg.Gateway.ModelsRefreshInterval = Duration(60 * time.Second)
+	}
 }
 
 func validate(cfg *Config) error {
@@ -155,6 +159,9 @@ func validate(cfg *Config) error {
 		}
 		if cfg.Gateway.RequestTimeout <= 0 {
 			return errors.New("gateway.requestTimeout must be positive")
+		}
+		if cfg.Gateway.ModelsRefreshInterval <= 0 {
+			return errors.New("gateway.modelsRefreshInterval must be positive")
 		}
 	}
 	return nil

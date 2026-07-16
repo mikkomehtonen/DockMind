@@ -48,6 +48,7 @@ func TestREADME(t *testing.T) {
 		{"status example includes shellyOn field", "shellyOn", true},
 		{"status example includes llamaSwapRunning field", "llamaSwapRunning", true},
 		{"status example includes llamaSwapHealthy field", "llamaSwapHealthy", true},
+		{"status example includes loadedModels field", "loadedModels", true},
 		{"status example includes lastError field", "lastError", true},
 		{"status example includes cooldownRemaining field", "cooldownRemaining", true},
 		{"documents cooldown feature", "cooldown", true},

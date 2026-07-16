@@ -63,7 +63,7 @@ type ContainerController interface {
 }
 
 type HealthChecker interface {
-	Check(ctx context.Context) (healthy bool, err error)
+	Check(ctx context.Context) (healthy bool, models []string, err error)
 }
 
 type Unbinder interface {
@@ -71,14 +71,15 @@ type Unbinder interface {
 }
 
 type StatusResponse struct {
-	State             string  `json:"state"`
-	GPUPresent        bool    `json:"gpuPresent"`
-	GPUName           string  `json:"gpuName"`
-	ShellyOn          bool    `json:"shellyOn"`
-	LlamaSwapRunning  bool    `json:"llamaSwapRunning"`
-	LlamaSwapHealthy  bool    `json:"llamaSwapHealthy"`
-	LastError         *string `json:"lastError"`
-	CooldownRemaining float64 `json:"cooldownRemaining"`
+	State             string   `json:"state"`
+	GPUPresent        bool     `json:"gpuPresent"`
+	GPUName           string   `json:"gpuName"`
+	ShellyOn          bool     `json:"shellyOn"`
+	LlamaSwapRunning  bool     `json:"llamaSwapRunning"`
+	LlamaSwapHealthy  bool     `json:"llamaSwapHealthy"`
+	LoadedModels      []string `json:"loadedModels"`
+	LastError         *string  `json:"lastError"`
+	CooldownRemaining float64  `json:"cooldownRemaining"`
 }
 
 type Machine struct {
@@ -243,9 +244,10 @@ func (m *Machine) Status() StatusResponse {
 	running := m.probeBool("Docker", false, func(ctx context.Context) (bool, error) {
 		return m.docker.IsRunning(ctx)
 	})
-	healthy := m.probeBool("Health", probeFailureExpected(state), func(ctx context.Context) (bool, error) {
-		return m.health.Check(ctx)
-	})
+	healthy, models := m.probeHealth(probeFailureExpected(state))
+	if models == nil {
+		models = []string{}
+	}
 
 	var lastError *string
 	if lastErr != nil {
@@ -260,6 +262,7 @@ func (m *Machine) Status() StatusResponse {
 		ShellyOn:          shellyOn,
 		LlamaSwapRunning:  running,
 		LlamaSwapHealthy:  healthy,
+		LoadedModels:      models,
 		LastError:         lastError,
 		CooldownRemaining: cooldownRemaining,
 	}
@@ -291,6 +294,21 @@ func (m *Machine) probeBool(name string, quietOnFailure bool, fn func(context.Co
 		}
 	}
 	return val
+}
+
+func (m *Machine) probeHealth(quietOnFailure bool) (bool, []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	healthy, models, err := m.health.Check(ctx)
+	if err != nil {
+		if quietOnFailure {
+			m.logger.Debug("Health status probe failed", "error", err)
+		} else {
+			m.logger.Warn("Health status probe failed", "error", err)
+		}
+		return false, nil
+	}
+	return healthy, models
 }
 
 func probeFailureExpected(s State) bool {
@@ -475,7 +493,8 @@ func (m *Machine) startup() {
 
 	m.logger.Info("Waiting for llama-swap health")
 	if err := m.poll(ctx, m.pollInterval, func(ctx context.Context) (bool, error) {
-		return m.health.Check(ctx)
+		healthy, _, err := m.health.Check(ctx)
+		return healthy, err
 	}); err != nil {
 		m.setState(Error, fmt.Errorf("llama-swap health check timeout: %w", err))
 		m.logger.Error("llama-swap health check timeout", "error", err)

@@ -93,13 +93,14 @@ func (s *modelCacheStore) save(cache *modelCache) error {
 
 // Gateway handles OpenAI-compatible API reverse proxying with auto-start and idle shutdown.
 type Gateway struct {
-	backendURL     *url.URL
-	idleTimeout    time.Duration // 0 = disabled
-	requestTimeout time.Duration
-	pollInterval   time.Duration
-	machine        StateController
-	logger         *slog.Logger
-	client         *http.Client
+	backendURL            *url.URL
+	idleTimeout           time.Duration // 0 = disabled
+	requestTimeout        time.Duration
+	pollInterval          time.Duration
+	modelsRefreshInterval time.Duration
+	machine               StateController
+	logger                *slog.Logger
+	client                *http.Client
 
 	cachedModels atomic.Pointer[modelCache]
 	cacheStore   *modelCacheStore
@@ -113,6 +114,11 @@ type Gateway struct {
 	// Idle watcher lifecycle.
 	idleCtx    context.Context
 	idleCancel context.CancelFunc
+
+	// Models refresher lifecycle.
+	modelsCtx    context.Context
+	modelsCancel context.CancelFunc
+	modelsDone   chan struct{}
 }
 
 // NewGateway creates a new Gateway. Returns error if backendURL is invalid.
@@ -123,13 +129,14 @@ func NewGateway(backendURL string, idleTimeout, requestTimeout time.Duration, ma
 	}
 
 	gw := &Gateway{
-		backendURL:     u,
-		idleTimeout:    idleTimeout,
-		requestTimeout: requestTimeout,
-		pollInterval:   time.Second,
-		machine:        machine,
-		logger:         logger,
-		lastActivity:   time.Now(),
+		backendURL:            u,
+		idleTimeout:           idleTimeout,
+		requestTimeout:        requestTimeout,
+		pollInterval:          time.Second,
+		modelsRefreshInterval: 60 * time.Second,
+		machine:               machine,
+		logger:                logger,
+		lastActivity:          time.Now(),
 		client: &http.Client{
 			Transport: &http.Transport{
 				ResponseHeaderTimeout: requestTimeout,
@@ -197,6 +204,87 @@ func (g *Gateway) StartIdleWatcher(ctx context.Context) {
 func (g *Gateway) StopIdleWatcher() {
 	if g.idleCancel != nil {
 		g.idleCancel()
+	}
+}
+
+// SetModelsRefreshInterval sets the interval for the background models cache refresher.
+func (g *Gateway) SetModelsRefreshInterval(d time.Duration) {
+	g.modelsRefreshInterval = d
+}
+
+// StartModelsRefresher starts the background periodic /v1/models cache refresher.
+// If modelsRefreshInterval is 0, the refresher exits immediately (no-op).
+func (g *Gateway) StartModelsRefresher(ctx context.Context) {
+	if g.modelsRefreshInterval <= 0 {
+		return
+	}
+	g.modelsCtx, g.modelsCancel = context.WithCancel(ctx)
+	g.modelsDone = make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(g.modelsRefreshInterval)
+		defer ticker.Stop()
+		defer close(g.modelsDone)
+		for {
+			select {
+			case <-g.modelsCtx.Done():
+				return
+			case <-ticker.C:
+				g.refreshModelsCache()
+			}
+		}
+	}()
+}
+
+// StopModelsRefresher stops the models cache refresher goroutine.
+func (g *Gateway) StopModelsRefresher() {
+	if g.modelsCancel != nil {
+		g.modelsCancel()
+	}
+	if g.modelsDone != nil {
+		<-g.modelsDone
+	}
+}
+
+func (g *Gateway) refreshModelsCache() {
+	if g.machine.State() != state.Ready {
+		return
+	}
+	ctx, cancel := context.WithTimeout(g.modelsCtx, g.requestTimeout)
+	defer cancel()
+
+	modelsURL := *g.backendURL
+	modelsURL.Path = "/v1/models"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL.String(), nil)
+	if err != nil {
+		g.logger.Debug("models refresh: request creation failed", "error", err)
+		return
+	}
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		g.logger.Debug("models refresh: fetch failed", "error", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		g.logger.Debug("models refresh: non-200", "status", resp.StatusCode)
+		return
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		g.logger.Debug("models refresh: read body failed", "error", err)
+		return
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	cache := &modelCache{body: body, contentType: contentType}
+	g.cachedModels.Store(cache)
+	if g.cacheStore != nil {
+		if err := g.cacheStore.save(cache); err != nil {
+			g.logger.Error("models refresh: persist failed", "error", err)
+		}
 	}
 }
 

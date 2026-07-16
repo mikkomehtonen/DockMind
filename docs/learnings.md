@@ -60,11 +60,11 @@
 **What happened**: Story 006 instructed adding a CSS rule `.app__logo-link` and then asserted the response body should not contain the substring `app__logo-link` when the env var was unset. The CSS selector made that assertion impossible, so the test had to check for the HTML attribute `class="app__logo-link"` instead.
 **Takeaway**: Treat story test snippets as intent, not gospel. Run them against the real implementation; when a literal substring check collides with static markup, tighten the assertion to the actual HTML contract and keep the AC's intent.
 
-## Reviewer agents running peck story load can switch branches in the shared repo
-**Date**: 2026-07-10
-**Area**: workflow / git
-**What happened**: During story 007, reviewer agents ran `peck story load 007` which created a separate `007` branch (distinct from `007-openai-gateway`) and checked it out in the shared `.git` directory. Subsequent commits went to the `007` branch instead of `007-openai-gateway`, causing the design revision to diverge onto the wrong branch. The issue was detected only when `git log --graph --all` showed two divergent branch tips.
-**Takeaway**: After reviewer agents run, verify the current branch with `git branch --show-current` before committing. If the branch has changed, either switch back with `git checkout <correct-branch>` or use `git checkout <correct-branch> -- <files>` to port changes across. Use `git log --graph --all` to diagnose divergent branches.
+## Background goroutines must reap goroutines and propagate context to in-flight requests
+**Date**: 2026-07-16
+**Area**: concurrency / gateway
+**What happened**: The first models-cache refresher used a bare `time.Ticker` and `context.Background()` for its backend request. Stopping the refresher raced with pending ticks (extra refresh after stop), and a refresh in flight during SIGTERM could stall shutdown for up to `requestTimeout` because cancellation did not reach the HTTP request.
+**Takeaway**: For background goroutines, close a `done` channel when the goroutine exits and wait on it in `Stop*()` so callers know the goroutine is fully reaped. Derive in-flight request contexts from the goroutine's lifecycle context (`context.WithTimeout(g.modelsCtx, ...)`) so `Stop*()` cancels outstanding work promptly.
 
 ## Code reviewer validates Go stdlib internals in design pseudocode
 **Date**: 2026-07-10

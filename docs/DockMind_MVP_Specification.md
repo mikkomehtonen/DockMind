@@ -152,7 +152,9 @@ Example:
   "shellyOn": true,
   "llamaSwapRunning": true,
   "llamaSwapHealthy": true,
-  "lastError": null
+  "loadedModels": ["qwen3.5-9b"],
+  "lastError": null,
+  "cooldownRemaining": 0
 }
 ```
 
@@ -211,12 +213,28 @@ Polling frequency should not exceed once per second.
 Health endpoint:
 
 ``` text
-GET /v1/models
+GET /running
 ```
 
 Expected response:
 
 -   HTTP 200
+
+Response shape when no model is loaded:
+
+``` json
+{"running":[]}
+```
+
+Response shape when a model is loaded:
+
+``` json
+{"running":[{"model":"qwen3.5-9b","state":"ready"}]}
+```
+
+The `model` field of each entry in the `running` array is reported in
+`GET /status` as `loadedModels`, regardless of the entry's `state`
+(`"starting"`, `"ready"`, etc.).
 
 ## Shelly
 
@@ -277,7 +295,7 @@ docker:
   container: llama-swap
 
 llamaSwap:
-  healthUrl: http://localhost:1234/v1/models
+  healthUrl: http://localhost:1234/running
 
 gpu:
   pollInterval: 1s
@@ -287,6 +305,13 @@ startup:
 
 shutdown:
   timeout: 30s
+
+power:
+  cooldown: 0s
+
+gateway:
+  enabled: false
+  modelsRefreshInterval: 60s
 ```
 
 ------------------------------------------------------------------------

@@ -34,6 +34,12 @@ func TestProductDoc(t *testing.T) {
 	if !strings.Contains(body, "012-egpu-unbind-shutdown") {
 		t.Error("docs/product.md Features list does not reference the 012-egpu-unbind-shutdown story")
 	}
+	if !strings.Contains(body, "013-quiet-off-probe-warnings") {
+		t.Error("docs/product.md Features list does not reference the 013-quiet-off-probe-warnings story")
+	}
+	if !strings.Contains(body, "014-llama-swap-running-endpoint") {
+		t.Error("docs/product.md Features list does not reference the 014-llama-swap-running-endpoint story")
+	}
 	if strings.Contains(body, "Web UI, Prometheus metrics, or request queuing during startup") {
 		t.Error("docs/product.md still lists Web UI as a non-goal")
 	}

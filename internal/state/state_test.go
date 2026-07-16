@@ -2,9 +2,11 @@ package state
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -151,16 +153,17 @@ func (f *fakeDocker) IsRunning(ctx context.Context) (bool, error) {
 type fakeHealth struct {
 	mu      sync.Mutex
 	healthy bool
+	models  []string
 	err     error
 }
 
-func (f *fakeHealth) Check(ctx context.Context) (bool, error) {
+func (f *fakeHealth) Check(ctx context.Context) (bool, []string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return false, f.err
+		return false, nil, f.err
 	}
-	return f.healthy, nil
+	return f.healthy, f.models, nil
 }
 
 type fakeUnbinder struct {
@@ -825,8 +828,10 @@ func TestStatus(t *testing.T) {
 		shellyOn         bool
 		dockerRunning    bool
 		healthHealthy    bool
+		healthModels     []string
 		wantState        string
 		wantLastErrorNil bool
+		wantLoadedModels []string
 	}{
 		{
 			name:             "ready status",
@@ -838,6 +843,7 @@ func TestStatus(t *testing.T) {
 			healthHealthy:    true,
 			wantState:        "Ready",
 			wantLastErrorNil: true,
+			wantLoadedModels: []string{},
 		},
 		{
 			name:             "error status",
@@ -845,12 +851,39 @@ func TestStatus(t *testing.T) {
 			lastError:        errors.New("something went wrong"),
 			wantState:        "Error",
 			wantLastErrorNil: false,
+			wantLoadedModels: []string{},
 		},
 		{
 			name:             "off status",
 			state:            Off,
 			wantState:        "Off",
 			wantLastErrorNil: true,
+			wantLoadedModels: []string{},
+		},
+		{
+			name:             "ready with loaded models",
+			state:            Ready,
+			gpuPresent:       true,
+			gpuName:          "NVIDIA GeForce RTX 5060 Ti",
+			shellyOn:         true,
+			dockerRunning:    true,
+			healthHealthy:    true,
+			healthModels:     []string{"qwen3.5-9b"},
+			wantState:        "Ready",
+			wantLastErrorNil: true,
+			wantLoadedModels: []string{"qwen3.5-9b"},
+		},
+		{
+			name:             "ready unhealthy",
+			state:            Ready,
+			gpuPresent:       true,
+			gpuName:          "NVIDIA GeForce RTX 5060 Ti",
+			shellyOn:         true,
+			dockerRunning:    true,
+			healthHealthy:    false,
+			wantState:        "Ready",
+			wantLastErrorNil: true,
+			wantLoadedModels: []string{},
 		},
 	}
 
@@ -864,6 +897,7 @@ func TestStatus(t *testing.T) {
 			power.on = tc.shellyOn
 			docker.running = tc.dockerRunning
 			health.healthy = tc.healthHealthy
+			health.models = tc.healthModels
 
 			status := m.Status()
 			if status.State != tc.wantState {
@@ -890,7 +924,25 @@ func TestStatus(t *testing.T) {
 			if !tc.wantLastErrorNil && status.LastError == nil {
 				t.Fatalf("expected lastError non-nil")
 			}
+			if !reflect.DeepEqual(status.LoadedModels, tc.wantLoadedModels) {
+				t.Fatalf("expected loadedModels %v, got %v", tc.wantLoadedModels, status.LoadedModels)
+			}
 		})
+	}
+}
+
+func TestStatusResponseJSON(t *testing.T) {
+	m, _, _, _, health, _ := newTestMachine()
+	m.state = Ready
+	health.healthy = true
+
+	status := m.Status()
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+	if !strings.Contains(string(data), `"loadedModels":[]`) {
+		t.Fatalf("expected JSON to contain \"loadedModels\":[], got %s", string(data))
 	}
 }
 

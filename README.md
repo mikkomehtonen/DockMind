@@ -9,7 +9,7 @@ DockMind is a lightweight daemon that manages the lifecycle of an AI inference s
 - **Deterministic State Machine** — tracks Off / Starting / Ready / ShuttingDown / Error states with single-transition concurrency.
 - **REST API** — simple HTTP endpoints for status, power control, restart, and daemon health.
 - **GPU Monitoring** — detects GPU availability and name via `nvidia-smi`.
-- **Health Monitoring** — checks `llama-swap` readiness through its `/v1/models` endpoint.
+- **Health Monitoring** — checks `llama-swap` readiness through its `/running` endpoint and reports the currently loaded model name(s) in status and the web UI.
 - **OpenAI-Compatible Gateway** — opt-in reverse proxy that forwards OpenAI SDK requests to the backend, with auto-startup on first request and idle shutdown to save power. Cached model list is served when the backend is off.
 
 See [docs/product.md](docs/product.md) for the full feature list and non-goals.
@@ -86,7 +86,7 @@ shelly:
 docker:
   container: llama-swap
 llamaSwap:
-  healthUrl: http://localhost:1234/v1/models
+  healthUrl: http://localhost:1234/running
 gpu:
   pollInterval: 1s
 startup:
@@ -117,8 +117,9 @@ gateway:
   idleTimeout: 300s
   requestTimeout: 120s
   modelsCacheDir: /var/lib/dockmind
+  modelsRefreshInterval: 60s
 llamaSwap:
-  healthUrl: http://localhost:1234/v1/models
+  healthUrl: http://localhost:1234/running
   backendUrl: http://localhost:1234
 ```
 
@@ -128,7 +129,9 @@ unavailable, it returns `503 Service Unavailable` with a `Retry-After` header.
 Cached model lists are served from memory with an `X-DockMind-Cached: true`
 header. Set `gateway.modelsCacheDir` to a writable directory to persist the
 cached model list across DockMind restarts; leave it unset to keep the cache
-in-memory only.
+in-memory only. When the gateway is enabled, a background goroutine fetches
+`/v1/models` every `gateway.modelsRefreshInterval` (default `60s`) while the
+system is `Ready` so the cache stays warm without requiring a client request.
 
 When `power.cooldown` is enabled and the gateway is enabled, the effective idle
 shutdown timeout is raised to at least `power.cooldown` so the idle watcher does
@@ -147,6 +150,7 @@ this adjustment happens.
   "shellyOn": true,
   "llamaSwapRunning": true,
   "llamaSwapHealthy": true,
+  "loadedModels": ["qwen3.5-9b"],
   "lastError": null,
   "cooldownRemaining": 0
 }

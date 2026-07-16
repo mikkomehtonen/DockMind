@@ -498,6 +498,76 @@ gateway:
 				}
 			},
 		},
+		{
+			name: "gateway enabled with modelsRefreshInterval absent defaults to 60s",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+  backendUrl: http://localhost:1234
+gateway:
+  enabled: true
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if cfg.Gateway.ModelsRefreshInterval != Duration(60*time.Second) {
+					t.Errorf("expected modelsRefreshInterval 60s, got %v", cfg.Gateway.ModelsRefreshInterval.Duration())
+				}
+			},
+		},
+		{
+			name: "gateway enabled with modelsRefreshInterval 30s",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+  backendUrl: http://localhost:1234
+gateway:
+  enabled: true
+  modelsRefreshInterval: 30s
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if cfg.Gateway.ModelsRefreshInterval != Duration(30*time.Second) {
+					t.Errorf("expected modelsRefreshInterval 30s, got %v", cfg.Gateway.ModelsRefreshInterval.Duration())
+				}
+			},
+		},
+		{
+			name: "gateway enabled with negative modelsRefreshInterval fails",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+  backendUrl: http://localhost:1234
+gateway:
+  enabled: true
+  modelsRefreshInterval: -1s
+`,
+			wantErr: true,
+			errSub:  "modelsRefreshInterval",
+		},
+		{
+			name: "gateway disabled with modelsRefreshInterval absent defaults to 0",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+gateway:
+  enabled: false
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if cfg.Gateway.ModelsRefreshInterval != Duration(0) {
+					t.Errorf("expected modelsRefreshInterval 0, got %v", cfg.Gateway.ModelsRefreshInterval.Duration())
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {

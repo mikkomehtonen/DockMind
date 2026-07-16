@@ -6,7 +6,7 @@ shelly:
 docker:
   container: llama-swap
 llamaSwap:
-  healthUrl: http://localhost:1234/v1/models
+  healthUrl: http://localhost:1234/running
   backendUrl: http://localhost:1234
 gpu:
   pollInterval: 1s
@@ -18,3 +18,4 @@ power:
   cooldown: 0s
 gateway:
   enabled: false
+  modelsRefreshInterval: 60s
