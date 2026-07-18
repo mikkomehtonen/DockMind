@@ -80,6 +80,7 @@ type StatusResponse struct {
 	LoadedModels      []string `json:"loadedModels"`
 	LastError         *string  `json:"lastError"`
 	CooldownRemaining float64  `json:"cooldownRemaining"`
+	IdleRemaining     float64  `json:"idleRemaining"`
 }
 
 type Machine struct {

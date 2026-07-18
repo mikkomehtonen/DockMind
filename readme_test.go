@@ -51,7 +51,9 @@ func TestREADME(t *testing.T) {
 		{"status example includes loadedModels field", "loadedModels", true},
 		{"status example includes lastError field", "lastError", true},
 		{"status example includes cooldownRemaining field", "cooldownRemaining", true},
+		{"status example includes idleRemaining field", "idleRemaining", true},
 		{"documents cooldown feature", "cooldown", true},
+		{"documents idle countdown feature", "idleRemaining", true},
 		{"does not leak ResultAlreadyInState", "ResultAlreadyInState", false},
 		{"does not leak ResultConflict", "ResultConflict", false},
 	}

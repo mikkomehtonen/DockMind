@@ -31,12 +31,19 @@ type StateMachine interface {
 	Restart() state.PowerResult
 }
 
+// IdleReporter reports the remaining time before an idle auto-shutdown.
+// Implementations return 0 when no shutdown is pending.
+type IdleReporter interface {
+	IdleRemaining() float64
+}
+
 type Server struct {
 	machine           StateMachine
 	logger            *slog.Logger
 	indexHTMLRendered []byte
 	gatewayHandler    http.Handler // nil = gateway disabled
 	modelsHandler     http.Handler // nil = gateway disabled
+	idleReporter      IdleReporter // nil = no idle reporter wired
 }
 
 func NewServer(machine StateMachine, logger *slog.Logger) *Server {
@@ -67,6 +74,11 @@ func (s *Server) SetGatewayHandlers(inference, models http.Handler) {
 	s.modelsHandler = models
 }
 
+// SetIdleReporter wires the source for the idle auto-shutdown countdown.
+func (s *Server) SetIdleReporter(r IdleReporter) {
+	s.idleReporter = r
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", s.handleStatus)
@@ -89,6 +101,9 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	status := s.machine.Status()
+	if s.idleReporter != nil {
+		status.IdleRemaining = s.idleReporter.IdleRemaining()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(status); err != nil {

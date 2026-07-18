@@ -186,6 +186,17 @@
       display: none;
     }
 
+    .state__idle {
+      margin: 0;
+      font-size: var(--fs-sm);
+      color: var(--muted);
+      min-height: 1.25rem;
+    }
+
+    .state__idle[hidden] {
+      display: none;
+    }
+
     .actions {
       display: flex;
       flex-direction: column;
@@ -374,6 +385,7 @@
       </div>
       <p class="state__feedback" id="feedback" hidden></p>
       <p class="state__cooldown" id="cooldown" hidden>Cooldown active — <span id="cooldown-time">0</span>s remaining</p>
+      <p class="state__idle" id="idle" hidden>Auto-shutdown in <span id="idle-time">0</span></p>
     </section>
 
     <section class="actions">
@@ -458,6 +470,8 @@
       errorMessage: document.getElementById("error-message"),
       cooldown: document.getElementById("cooldown"),
       cooldownTime: document.getElementById("cooldown-time"),
+      idle: document.getElementById("idle"),
+      idleTime: document.getElementById("idle-time"),
     };
 
     let pending = false;
@@ -504,6 +518,12 @@
         els.feedback.textContent = "";
         feedbackTimer = null;
       }, FEEDBACK_CLEAR_MS);
+    }
+
+    function formatIdleRemaining(seconds) {
+      const s = Math.ceil(seconds);
+      if (s < 60) return s + "s";
+      return Math.ceil(s / 60) + "m";
     }
 
     function render(data) {
@@ -571,6 +591,13 @@
         els.btnOn.disabled = !enabled.on;
         els.btnOff.disabled = !enabled.off;
         els.btnRestart.disabled = !enabled.restart;
+      }
+
+      if (data.idleRemaining > 0) {
+        els.idle.hidden = false;
+        els.idleTime.textContent = formatIdleRemaining(data.idleRemaining);
+      } else {
+        els.idle.hidden = true;
       }
 
       showFeedback("");

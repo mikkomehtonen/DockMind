@@ -138,6 +138,11 @@ shutdown timeout is raised to at least `power.cooldown` so the idle watcher does
 not try to shut down during the post-startup cooldown. A warning is logged when
 this adjustment happens.
 
+When the gateway is enabled with `idleTimeout > 0`, `GET /status` reports the
+remaining seconds before an idle auto-shutdown in `idleRemaining`, and the web UI
+shows an auto-shutdown countdown. The countdown is hidden when the state is not
+`Ready` or while an inference request is in flight.
+
 ## Status Example
 
 `GET /status` returns:
@@ -152,7 +157,8 @@ this adjustment happens.
   "llamaSwapHealthy": true,
   "loadedModels": ["qwen3.5-9b"],
   "lastError": null,
-  "cooldownRemaining": 0
+  "cooldownRemaining": 0,
+  "idleRemaining": 0
 }
 ```
 

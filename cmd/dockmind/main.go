@@ -81,6 +81,7 @@ func main() {
 		}
 		gw.InitModelsCache(cfg.Gateway.ModelsCacheDir)
 		server.SetGatewayHandlers(gw.Handler(), gw.ModelsHandler())
+		server.SetIdleReporter(gw)
 		gw.SetModelsRefreshInterval(cfg.Gateway.ModelsRefreshInterval.Duration())
 		gw.StartModelsRefresher(context.Background())
 		gw.StartIdleWatcher(context.Background())

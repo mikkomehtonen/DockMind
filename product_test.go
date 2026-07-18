@@ -43,6 +43,9 @@ func TestProductDoc(t *testing.T) {
 	if !strings.Contains(body, "015-fix-loaded-models-empty") {
 		t.Error("docs/product.md Features list does not reference the 015-fix-loaded-models-empty story")
 	}
+	if !strings.Contains(body, "016-auto-shutdown-timer") {
+		t.Error("docs/product.md Features list does not reference the 016-auto-shutdown-timer story")
+	}
 	if strings.Contains(body, "Web UI, Prometheus metrics, or request queuing during startup") {
 		t.Error("docs/product.md still lists Web UI as a non-goal")
 	}

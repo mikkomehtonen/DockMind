@@ -18,11 +18,11 @@
 **What happened**: A test that validated the implementation's behavior (`docker.IsRunning` returning an error on missing container) caused a Fail because the AC explicitly required `(false, nil)`. Tests must assert the exact contract in the story, not the implementation's natural behavior.
 **Takeaway**: Read the AC matrix literally when writing tests. If the implementation diverges from the AC, fix the implementation or escalate; do not write tests that codify the divergence.
 
-## Include gofmt in the lint target from day one
-**Date**: 2026-07-08
-**Area**: build / lint
-**What happened**: `go vet` passed but `gofmt -l` reported misaligned struct fields in several files. The Makefile `lint` target initially only ran `go vet`.
-**Takeaway**: Make `lint` run both `gofmt -l .` and `go vet ./...` so formatting issues are caught before code review.
+## Race-detector requirements can expose pre-existing test races
+**Date**: 2026-07-18
+**Area**: testing / concurrency
+**What happened**: Story 016 required `go test -race ./internal/gateway/` to pass. The gateway refresher tests had used a plain `int` counter (`callCount`) that the `httptest` handler goroutine incremented while the test goroutine read it, causing multiple data-race failures unrelated to the new idle-countdown code.
+**Takeaway**: When a story mandates `-race`, audit existing tests in the same package for unsynchronized shared variables (counters, flags, timestamps) across handler and test goroutines. Use `sync/atomic` or a mutex, and remember that `atomic.Int32` must be read with `.Load()` — copying the value itself triggers a `go vet` warning.
 
 ## Reviewer reports are committed to the branch; .opencode/ stays untracked workspace config
 **Date**: 2026-07-08

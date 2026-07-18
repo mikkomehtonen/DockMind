@@ -179,6 +179,10 @@
           "cooldownRemaining": {
             "type": "number",
             "description": "Remaining cooldown in seconds. 0 when no cooldown is active."
+          },
+          "idleRemaining": {
+            "type": "number",
+            "description": "Remaining seconds before an idle auto-shutdown. 0 when the gateway is disabled, idleTimeout is 0, the state is not Ready, or a request is in flight."
           }
         }
       },

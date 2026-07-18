@@ -175,6 +175,31 @@ func (g *Gateway) InitModelsCache(dir string) {
 	}
 }
 
+// IdleRemaining returns the number of seconds before an idle auto-shutdown,
+// or 0 when no shutdown is pending. It is safe to call concurrently with the
+// idle watcher and request handlers.
+func (g *Gateway) IdleRemaining() float64 {
+	if g.idleTimeout <= 0 {
+		return 0
+	}
+	if g.machine.State() != state.Ready {
+		return 0
+	}
+	g.activeMu.Lock()
+	active := g.active
+	lastActivity := g.lastActivity
+	pendingShutdown := g.pendingShutdown
+	g.activeMu.Unlock()
+	if active > 0 || pendingShutdown {
+		return 0
+	}
+	remaining := g.idleTimeout - time.Since(lastActivity)
+	if remaining < 0 {
+		return 0
+	}
+	return remaining.Seconds()
+}
+
 // StartIdleWatcher starts the background idle shutdown goroutine.
 // If idleTimeout is 0, the watcher exits immediately (no-op).
 func (g *Gateway) StartIdleWatcher(ctx context.Context) {

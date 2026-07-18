@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1641,10 +1642,10 @@ func TestModelsHandler_ConcurrentSavesNoRace(t *testing.T) {
 
 func TestModelsRefresher_UpdatesCache(t *testing.T) {
 	modelResponse := `{"data":[{"id":"refreshed-model","object":"model"}]}`
-	var callCount int
+	var callCount atomic.Int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
-			callCount++
+			callCount.Add(1)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(modelResponse))
@@ -1663,7 +1664,7 @@ func TestModelsRefresher_UpdatesCache(t *testing.T) {
 	// Wait for at least one refresh tick.
 	time.Sleep(50 * time.Millisecond)
 
-	if callCount == 0 {
+	if callCount.Load() == 0 {
 		t.Fatal("expected at least one /v1/models refresh request")
 	}
 	cached := gw.cachedModels.Load()
@@ -1703,10 +1704,10 @@ func TestModelsRefresher_PersistsToDisk(t *testing.T) {
 }
 
 func TestModelsRefresher_SkipsWhenOff(t *testing.T) {
-	var callCount int
+	var callCount atomic.Int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
-			callCount++
+			callCount.Add(1)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -1727,8 +1728,8 @@ func TestModelsRefresher_SkipsWhenOff(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if callCount != 0 {
-		t.Errorf("expected no /v1/models refresh requests when Off, got %d", callCount)
+	if callCount.Load() != 0 {
+		t.Errorf("expected no /v1/models refresh requests when Off, got %d", callCount.Load())
 	}
 	cached := gw.cachedModels.Load()
 	if cached == nil || !strings.Contains(string(cached.body), "old-model") {
@@ -1737,10 +1738,10 @@ func TestModelsRefresher_SkipsWhenOff(t *testing.T) {
 }
 
 func TestModelsRefresher_SkipsOnBackend500(t *testing.T) {
-	var callCount int
+	var callCount atomic.Int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
-			callCount++
+			callCount.Add(1)
 		}
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -1760,7 +1761,7 @@ func TestModelsRefresher_SkipsOnBackend500(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if callCount == 0 {
+	if callCount.Load() == 0 {
 		t.Fatal("expected at least one /v1/models refresh request")
 	}
 	cached := gw.cachedModels.Load()
@@ -1792,10 +1793,10 @@ func TestModelsRefresher_SkipsOnUnreachableBackend(t *testing.T) {
 
 func TestModelsRefresher_StopPreventsFurtherRefreshes(t *testing.T) {
 	block := make(chan struct{})
-	var callCount int
+	var callCount atomic.Int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
-			callCount++
+			callCount.Add(1)
 			<-block
 		}
 		w.WriteHeader(http.StatusOK)
@@ -1813,7 +1814,7 @@ func TestModelsRefresher_StopPreventsFurtherRefreshes(t *testing.T) {
 
 	// Wait for the first refresh request to be in-flight and blocked.
 	for {
-		if callCount > 0 {
+		if callCount.Load() > 0 {
 			break
 		}
 		time.Sleep(1 * time.Millisecond)
@@ -1823,13 +1824,13 @@ func TestModelsRefresher_StopPreventsFurtherRefreshes(t *testing.T) {
 	close(block)
 	gw.StopModelsRefresher()
 
-	callsBefore := callCount
+	callsBefore := callCount.Load()
 
 	// Wait long enough that another tick would have fired if the refresher were still running.
 	time.Sleep(50 * time.Millisecond)
 
-	if callCount != callsBefore {
-		t.Errorf("expected no additional refresh requests after stop, got %d before and %d after", callsBefore, callCount)
+	if callCount.Load() != callsBefore {
+		t.Errorf("expected no additional refresh requests after stop, got %d before and %d after", callsBefore, callCount.Load())
 	}
 }
 
@@ -1994,5 +1995,133 @@ func TestFullGatewayFlow(t *testing.T) {
 	ctrl.mu.Unlock()
 	if calls == 0 {
 		t.Error("expected PowerOff called after idle timeout")
+	}
+}
+
+func TestIdleRemaining_DisabledWhenTimeoutIsZero(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGateway("http://localhost:99999", 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if got := gw.IdleRemaining(); got != 0 {
+		t.Errorf("expected 0 when idleTimeout is 0, got %v", got)
+	}
+}
+
+func TestIdleRemaining_ZeroWhenNotReady(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	for _, s := range []state.State{state.Off, state.Starting, state.ShuttingDown, state.Error} {
+		ctrl.setState(s, nil)
+		if got := gw.IdleRemaining(); got != 0 {
+			t.Errorf("expected 0 in state %s, got %v", s, got)
+		}
+	}
+}
+
+func TestIdleRemaining_PositiveWhenReadyAndIdle(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now()
+	gw.activeMu.Unlock()
+
+	got := gw.IdleRemaining()
+	if got <= 0 || got > 0.06 {
+		t.Errorf("expected positive remaining near 0.05, got %v", got)
+	}
+}
+
+func TestIdleRemaining_DecreasesAsIdleTimePasses(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now().Add(-25 * time.Millisecond)
+	gw.activeMu.Unlock()
+
+	got := gw.IdleRemaining()
+	if got <= 0 || got > 0.035 {
+		t.Errorf("expected remaining near 0.025, got %v", got)
+	}
+}
+
+func TestIdleRemaining_ZeroWhenIdleTimeoutExceeded(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now().Add(-100 * time.Millisecond)
+	gw.activeMu.Unlock()
+
+	if got := gw.IdleRemaining(); got != 0 {
+		t.Errorf("expected 0 when idle exceeded, got %v", got)
+	}
+}
+
+func TestIdleRemaining_ZeroWhenRequestInFlight(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.activeMu.Lock()
+	gw.active = 1
+	gw.lastActivity = time.Now()
+	gw.activeMu.Unlock()
+
+	if got := gw.IdleRemaining(); got != 0 {
+		t.Errorf("expected 0 while request in flight, got %v", got)
+	}
+}
+
+func TestIdleRemaining_ZeroWhenPendingShutdown(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now() // remaining would be positive, but pendingShutdown forces 0
+	gw.pendingShutdown = true
+	gw.activeMu.Unlock()
+
+	if got := gw.IdleRemaining(); got != 0 {
+		t.Errorf("expected 0 when pendingShutdown is true, got %v", got)
 	}
 }

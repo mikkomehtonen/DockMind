@@ -17,6 +17,14 @@ type fakeStateMachine struct {
 	restart  state.PowerResult
 }
 
+type fakeIdleReporter struct {
+	value float64
+}
+
+func (f *fakeIdleReporter) IdleRemaining() float64 {
+	return f.value
+}
+
 func (f *fakeStateMachine) Status() state.StatusResponse {
 	return f.status
 }
@@ -297,7 +305,7 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected components.schemas.StatusResponse.properties to be an object")
 		}
-		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "lastError", "cooldownRemaining"} {
+		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "lastError", "cooldownRemaining", "idleRemaining"} {
 			if _, ok := properties[field]; !ok {
 				t.Fatalf("expected StatusResponse properties to contain %q", field)
 			}
@@ -406,6 +414,10 @@ func TestWebUIRoutes(t *testing.T) {
 			"Cooldown active",
 			"429",
 			"loadedModels",
+			"Auto-shutdown in",
+			"idle-time",
+			"formatIdleRemaining",
+			"idleRemaining",
 		} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("expected body to contain %q, got %q", want, body)
@@ -581,4 +593,55 @@ func TestLogoLink(t *testing.T) {
 	if !strings.Contains(body, `href="https://example.com"`) {
 		t.Fatalf("expected body to contain href=\"https://example.com\"")
 	}
+}
+
+func TestIdleReporter(t *testing.T) {
+	t.Run("no reporter returns idleRemaining 0", func(t *testing.T) {
+		fake := &fakeStateMachine{status: state.StatusResponse{State: "Ready"}}
+		server := NewServer(fake, nil)
+		req := httptest.NewRequest(http.MethodGet, "/status", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `"idleRemaining":0`) {
+			t.Fatalf("expected body to contain \"idleRemaining\":0, got %q", rec.Body.String())
+		}
+	})
+
+	t.Run("reporter value is merged", func(t *testing.T) {
+		fake := &fakeStateMachine{status: state.StatusResponse{State: "Ready"}}
+		server := NewServer(fake, nil)
+		server.SetIdleReporter(&fakeIdleReporter{value: 45.5})
+
+		req := httptest.NewRequest(http.MethodGet, "/status", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `"idleRemaining":45.5`) {
+			t.Fatalf("expected body to contain \"idleRemaining\":45.5, got %q", rec.Body.String())
+		}
+	})
+
+	t.Run("reporter returning 0 is merged", func(t *testing.T) {
+		fake := &fakeStateMachine{status: state.StatusResponse{State: "Ready"}}
+		server := NewServer(fake, nil)
+		server.SetIdleReporter(&fakeIdleReporter{value: 0})
+
+		req := httptest.NewRequest(http.MethodGet, "/status", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `"idleRemaining":0`) {
+			t.Fatalf("expected body to contain \"idleRemaining\":0, got %q", rec.Body.String())
+		}
+	})
 }
