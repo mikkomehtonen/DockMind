@@ -625,6 +625,16 @@ func TestWebUIRoutes(t *testing.T) {
 			"gpu-procs-memory",
 			"VRAM:",
 			"gpuProcesses",
+			"gpu-procs__vram-bar",
+			"gpu-procs__vram-fill",
+			"gpu-procs__vram-fill--ok",
+			"gpu-procs__vram-fill--warn",
+			"gpu-procs__vram-fill--crit",
+			"parseInt",
+			"VRAM_WARN_PCT",
+			"VRAM_CRIT_PCT",
+			"NaN",
+			"style.width",
 		} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("expected body to contain %q, got %q", want, body)

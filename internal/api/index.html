@@ -364,6 +364,32 @@
       color: var(--muted);
     }
 
+    .gpu-procs__vram-bar {
+      width: 100%;
+      height: 0.5rem;
+      background: var(--surface-2);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .gpu-procs__vram-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 200ms ease, background-color 200ms ease;
+    }
+
+    .gpu-procs__vram-fill--ok {
+      background: var(--primary);
+    }
+
+    .gpu-procs__vram-fill--warn {
+      background: var(--busy);
+    }
+
+    .gpu-procs__vram-fill--crit {
+      background: var(--danger);
+    }
+
     .aux {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -449,7 +475,8 @@
       .state__dot,
       .component__dot,
       .state__badge,
-      .btn {
+      .btn,
+      .gpu-procs__vram-fill {
         transition: none;
       }
     }
@@ -518,6 +545,9 @@
       <p class="gpu-procs__label">GPU processes</p>
       <ul class="gpu-procs__list" id="gpu-procs-list"></ul>
       <p class="gpu-procs__memory" id="gpu-procs-memory"></p>
+      <div class="gpu-procs__vram-bar" id="gpu-procs-vram-bar" hidden>
+        <div class="gpu-procs__vram-fill" id="gpu-procs-vram-fill"></div>
+      </div>
     </section>
 
     <section class="error" id="error-banner" hidden>
@@ -552,6 +582,9 @@
       Error:       { on: false, off: true,  restart: false },
     };
 
+    const VRAM_WARN_PCT = 75;
+    const VRAM_CRIT_PCT = 90;
+
     const els = {
       connDot: document.getElementById("conn-dot"),
       connText: document.getElementById("conn-text"),
@@ -575,6 +608,8 @@
       gpuProcsBanner: document.getElementById("gpu-procs-banner"),
       gpuProcsList: document.getElementById("gpu-procs-list"),
       gpuProcsMemory: document.getElementById("gpu-procs-memory"),
+      gpuProcsVramBar: document.getElementById("gpu-procs-vram-bar"),
+      gpuProcsVramFill: document.getElementById("gpu-procs-vram-fill"),
       auxCard: document.getElementById("aux-card"),
       auxList: document.getElementById("aux-list"),
       cooldown: document.getElementById("cooldown"),
@@ -694,13 +729,28 @@
           .join("");
         if (data.gpuMemory && data.gpuMemory.total) {
           els.gpuProcsMemory.textContent = `VRAM: ${data.gpuMemory.used} / ${data.gpuMemory.total} used (${data.gpuMemory.free} free)`;
+          const usedNum = parseInt(data.gpuMemory.used, 10);
+          const totalNum = parseInt(data.gpuMemory.total, 10);
+          if (isNaN(usedNum) || isNaN(totalNum) || totalNum <= 0) {
+            els.gpuProcsVramBar.hidden = true;
+          } else {
+            const pct = Math.min(100, Math.max(0, Math.round(usedNum / totalNum * 100)));
+            els.gpuProcsVramBar.hidden = false;
+            els.gpuProcsVramFill.style.width = pct + "%";
+            els.gpuProcsVramFill.className = "gpu-procs__vram-fill" +
+              (pct >= VRAM_CRIT_PCT ? " gpu-procs__vram-fill--crit" :
+               pct >= VRAM_WARN_PCT ? " gpu-procs__vram-fill--warn" :
+               " gpu-procs__vram-fill--ok");
+          }
         } else {
           els.gpuProcsMemory.textContent = "";
+          els.gpuProcsVramBar.hidden = true;
         }
       } else {
         els.gpuProcsBanner.hidden = true;
         els.gpuProcsList.innerHTML = "";
         els.gpuProcsMemory.textContent = "";
+        els.gpuProcsVramBar.hidden = true;
       }
 
       const auxEnabled = (data.state === "Off" || data.state === "Ready") && data.cooldownRemaining <= 0;
