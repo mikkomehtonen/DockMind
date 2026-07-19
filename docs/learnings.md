@@ -1,5 +1,11 @@
 # Learnings
 
+## Reusing a task_id can return a stale reviewer report
+**Date**: 2026-07-19
+**Area**: workflow / reviewers
+**What happened**: After committing fixes for an acceptance-review Fail, the second run reused the same task_id and produced a report that ignored the new tests (same line numbers, same gaps, no mention of the added assertions). Starting a fresh acceptance-reviewer task with no task_id correctly analyzed the current branch and passed.
+**Takeaway**: When reviewer feedback has been addressed with new commits, prefer a fresh task invocation over reusing the previous task_id. If reusing a task_id, verify the report references the current HEAD and the new/changed files; if it looks stale, restart with a fresh task.
+
 ## Atomic resume-check + state transition under stateMu
 **Date**: 2026-07-19
 **Area**: concurrency / state machine
@@ -54,12 +60,6 @@
 **What happened**: Story 007 is a design-only deliverable (Markdown document, no production code). The code reviewer still flagged a blocking correctness issue: the `EnsureReady` pseudocode read `m.lastError` outside the `stateMu` lock, contradicting the document's own Synchronization section which states `stateMu` guards `lastError`. This would be a data race if implemented verbatim.
 **Takeaway**: Design-document pseudocode is reviewed as near-final implementation, not as illustrative prose. Before running reviewers on a design-only story, verify that pseudocode is internally consistent with its own stated synchronization rules — capture shared state under the lock that guards it, and ensure the pseudocode reflects every case described in the surrounding prose.
 
-## Story-provided test snippets may conflict with the implementation they prescribe
-**Date**: 2026-07-08
-**Area**: testing / stories
-**What happened**: Story 006 instructed adding a CSS rule `.app__logo-link` and then asserted the response body should not contain the substring `app__logo-link` when the env var was unset. The CSS selector made that assertion impossible, so the test had to check for the HTML attribute `class="app__logo-link"` instead.
-**Takeaway**: Treat story test snippets as intent, not gospel. Run them against the real implementation; when a literal substring check collides with static markup, tighten the assertion to the actual HTML contract and keep the AC's intent.
-
 ## Background goroutines must reap goroutines and propagate context to in-flight requests
 **Date**: 2026-07-16
 **Area**: concurrency / gateway
@@ -71,24 +71,6 @@
 **Area**: code review / design documents
 **What happened**: The code reviewer found two blocking issues in story 007's design pseudocode by checking against actual Go 1.24 stdlib behavior: (1) `responseTracker` embedding `http.ResponseWriter` does not promote the concrete type's `Flush` method — `http.ResponseController.Flush()` needs an `Unwrap() http.ResponseWriter` method to traverse the wrapper, or SSE streaming silently breaks; (2) `errors.Is(err, context.DeadlineExceeded)` returns true for startup failures because the existing `poll` function wraps `context.DeadlineExceeded` in `lastError` — a sentinel error (`ErrBackendError`) is needed to distinguish startup failure from client timeout.
 **Takeaway**: When writing design pseudocode that wraps stdlib types or uses `errors.Is`, verify the behavior against the actual Go version's source. Interface embedding does not promote concrete-type methods; `errors.Is` traverses the entire wrapped chain. Use sentinel errors to disambiguate error categories when underlying errors may share wrapped types.
-
-## Buffer-first ResponseWriter wrappers are simpler than tee for non-streaming responses
-**Date**: 2026-07-10
-**Area**: architecture / design documents
-**What happened**: The model-list cache design initially used a `capturingWriter` that teed the response body to a buffer while streaming to the client (same pattern as `responseTracker`). The code reviewer flagged two blocking issues: (1) the tee approach cannot detect truncation — a partial 200 response with bytes in the buffer passes the `buf.Len() > 0` check and overwrites a valid cache; (2) the shared `ErrorHandler` does `w.(*responseTracker)` which fails for `*capturingWriter`. Replacing the tee with a buffer-first `bufferingWriter` (captures the full response before sending anything to the client) fixed both: truncation is detected via a `failed` flag set by the `ErrorHandler`, and no `Unwrap()` method is needed because flush errors are silently discarded for small non-streaming responses.
-**Takeaway**: For non-streaming HTTP responses (e.g. model lists, metadata endpoints), use a buffer-first `ResponseWriter` wrapper that captures the full response before sending to the client. This detects truncation for free (the `ErrorHandler` sets a `failed` flag), avoids `Unwrap()` complexity, and simplifies the `ErrorHandler` (it can type-assert on the wrapper and set a flag instead of writing an error). Reserve the tee/streaming pattern (`responseTracker` with `Unwrap()`) for SSE streaming endpoints where buffering the full response is impractical.
-
-## EnsureReady must handle PowerOn ResultConflict to avoid waiting on a stale changeCh
-**Date**: 2026-07-10
-**Area**: concurrency / state machine
-**What happened**: The first implementation of `EnsureReady` captured `changeCh` under `stateMu`, called `PowerOn()` from the `Off` case, and then unconditionally waited on that channel. If `PowerOn()` returned `ResultConflict` because a just-completed shutdown goroutine still held `transitionMu` after `setState(Off)`, the captured channel would never close again and `EnsureReady` hung until its context expired. A later fix used `continue` after every `PowerOn()`, which avoided the hang but introduced a busy-wait spin because the startup goroutine had not yet called `setState(Starting)`.
-**Takeaway**: In `EnsureReady`, capture `changeCh` before `PowerOn()`, then branch on the result: if `ResultAccepted`, wait on the captured channel (the startup goroutine will close it via `setState`); if `ResultConflict` or `ResultAlreadyInState`, re-evaluate state and capture a fresh channel. This preserves prompt `ctx.Done()` handling while avoiding the stale-channel hang.
-
-## Dead code in wrapper types is blocking even when tests exercise it
-**Date**: 2026-07-10
-**Area**: code review / testing
-**What happened**: `bufferingWriter` initially implemented the full `http.ResponseWriter` interface (`Header`, `Write`, `WriteHeader`) and had a dedicated test for it. The code reviewer flagged this as blocking dead code because the production models path wrote directly to the struct's exported fields and never invoked the interface methods. Removing the methods and the test that exercised only the dead path was required to pass.
-**Takeaway**: Do not keep unused interface methods just because a wrapper *could* be used as an `http.ResponseWriter`. If production code accesses the wrapper through concrete fields, the interface methods are dead code and will be flagged. Remove them and any tests that only exercise the unused interface contract.
 
 ## fakePower.SetPower mutates fakeGPU.present in state tests
 **Date**: 2026-07-11
@@ -108,8 +90,4 @@
 **What happened**: In `TestCooldown`, subtests that expected `ResultAccepted` launched real startup/shutdown goroutines and then immediately asserted the pre-transition state (`Off`/`Ready`). This violated the repo convention to call `m.Wait()` before asserting final state, created a scheduling-order race under `GOMAXPROCS>1`, and caused subtests to run for 500ms each when the fakes were not configured as healthy.
 **Takeaway**: In table-driven state tests, branch on the result: for `ResultAccepted`, call `m.Wait()` and assert the final state (`Ready` after `PowerOn`/`Restart`, `Off` after `PowerOff`); for `ResultAlreadyInState`/`ResultConflict`/`ResultCooldown`, assert the unchanged state immediately. Also configure the fakes (`gpu.present`, `health.healthy`) so async transitions complete quickly when the test does wait.
 
-## `time.Now()` in test-case literals is evaluated at function start, not subtest run
-**Date**: 2026-07-14
-**Area**: testing / timing
-**What happened**: Cooldown tests used `offTime: time.Now()` inside a table-driven test slice literal. When earlier subtests unexpectedly took 500ms because fakes were not healthy, the stored timestamps were stale by the time the cooldown-blocking subtests ran, causing them to see an expired cooldown and fail.
-**Takeaway**: For timing-sensitive table-driven tests, either capture `time.Now()` inside the subtest closure or use durations large enough to survive the full table execution. If async transitions are involved, ensure the fakes are configured to complete promptly so the table does not outlast the cooldown window.
+

@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -40,7 +41,7 @@ func (m *Monitor) Status(ctx context.Context) (bool, string, error) {
 }
 
 func (m *Monitor) Processes(ctx context.Context) ([]state.GPUProcess, error) {
-	out, err := m.exec(ctx, "nvidia-smi", "--query-compute-apps=pid,process_name", "--format=csv,noheader")
+	out, err := m.exec(ctx, "nvidia-smi", "--query-compute-apps=pid,process_name,used_gpu_memory", "--format=csv,noheader")
 	if err != nil {
 		return nil, err
 	}
@@ -52,18 +53,49 @@ func (m *Monitor) Processes(ctx context.Context) ([]state.GPUProcess, error) {
 		if trimmed == "" {
 			continue
 		}
-		fields := strings.SplitN(trimmed, ", ", 2)
-		if len(fields) < 2 {
+		firstSep := strings.Index(trimmed, ", ")
+		if firstSep < 0 {
 			continue
 		}
-		pid, err := strconv.Atoi(strings.TrimSpace(fields[0]))
+		lastSep := strings.LastIndex(trimmed, ", ")
+		if lastSep <= firstSep {
+			continue
+		}
+		pidStr := strings.TrimSpace(trimmed[:firstSep])
+		pid, err := strconv.Atoi(pidStr)
 		if err != nil {
 			continue
 		}
 		procs = append(procs, state.GPUProcess{
-			PID:  pid,
-			Name: fields[1],
+			PID:           pid,
+			Name:          trimmed[firstSep+2 : lastSep],
+			UsedGPUMemory: trimmed[lastSep+2:],
 		})
 	}
 	return procs, nil
+}
+
+func (m *Monitor) Memory(ctx context.Context) (state.GPUMemory, error) {
+	out, err := m.exec(ctx, "nvidia-smi", "--query-gpu=memory.total,memory.used,memory.free", "--format=csv,noheader")
+	if err != nil {
+		return state.GPUMemory{}, err
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		fields := strings.SplitN(trimmed, ", ", 3)
+		if len(fields) < 3 {
+			return state.GPUMemory{}, fmt.Errorf("unexpected nvidia-smi memory output: %q", trimmed)
+		}
+		return state.GPUMemory{
+			Total: fields[0],
+			Used:  fields[1],
+			Free:  fields[2],
+		}, nil
+	}
+	return state.GPUMemory{}, fmt.Errorf("no nvidia-smi memory output")
 }

@@ -56,13 +56,21 @@ type PowerController interface {
 }
 
 type GPUProcess struct {
-	PID  int    `json:"pid"`
-	Name string `json:"name"`
+	PID           int    `json:"pid"`
+	Name          string `json:"name"`
+	UsedGPUMemory string `json:"usedGpuMemory"`
+}
+
+type GPUMemory struct {
+	Total string `json:"total"`
+	Used  string `json:"used"`
+	Free  string `json:"free"`
 }
 
 type GPUMonitor interface {
 	Status(ctx context.Context) (present bool, name string, err error)
 	Processes(ctx context.Context) ([]GPUProcess, error)
+	Memory(ctx context.Context) (GPUMemory, error)
 }
 
 type ContainerController interface {
@@ -110,6 +118,7 @@ type StatusResponse struct {
 	LlamaSwapHealthy  bool                 `json:"llamaSwapHealthy"`
 	LoadedModels      []string             `json:"loadedModels"`
 	GPUProcesses      []GPUProcess         `json:"gpuProcesses"`
+	GPUMemory         GPUMemory            `json:"gpuMemory"`
 	LastError         *string              `json:"lastError"`
 	CooldownRemaining float64              `json:"cooldownRemaining"`
 	IdleRemaining     float64              `json:"idleRemaining"`
@@ -305,8 +314,12 @@ func (m *Machine) Status() StatusResponse {
 
 	gpuPresent, gpuName := m.probeGPU(probeFailureExpected(state))
 	var gpuProcesses []GPUProcess
+	var gpuMemory GPUMemory
 	if gpuPresent {
 		gpuProcesses = m.probeGPUProcesses()
+		if gpuProcesses != nil && len(gpuProcesses) > 0 {
+			gpuMemory = m.probeGPUMemory()
+		}
 	}
 	if gpuProcesses == nil {
 		gpuProcesses = []GPUProcess{}
@@ -339,6 +352,7 @@ func (m *Machine) Status() StatusResponse {
 		LlamaSwapHealthy:  healthy,
 		LoadedModels:      models,
 		GPUProcesses:      gpuProcesses,
+		GPUMemory:         gpuMemory,
 		LastError:         lastError,
 		CooldownRemaining: cooldownRemaining,
 		AuxContainers:     auxStatuses,
@@ -470,6 +484,17 @@ func (m *Machine) probeGPUProcesses() []GPUProcess {
 		return nil
 	}
 	return procs
+}
+
+func (m *Machine) probeGPUMemory() GPUMemory {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mem, err := m.gpu.Memory(ctx)
+	if err != nil {
+		m.logger.Debug("GPU memory probe failed", "error", err)
+		return GPUMemory{}
+	}
+	return mem
 }
 
 func probeFailureExpected(s State) bool {

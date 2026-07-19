@@ -111,6 +111,67 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestMemory(t *testing.T) {
+	cases := []struct {
+		name    string
+		stdout  string
+		execErr error
+		want    state.GPUMemory
+		wantErr bool
+	}{
+		{
+			name:   "single gpu",
+			stdout: "16311 MiB, 12742 MiB, 3108 MiB\n",
+			want:   state.GPUMemory{Total: "16311 MiB", Used: "12742 MiB", Free: "3108 MiB"},
+		},
+		{
+			name:   "multiple gpus first line",
+			stdout: "16311 MiB, 12742 MiB, 3108 MiB\n24576 MiB, 0 MiB, 24576 MiB\n",
+			want:   state.GPUMemory{Total: "16311 MiB", Used: "12742 MiB", Free: "3108 MiB"},
+		},
+		{
+			name:    "empty stdout",
+			stdout:  "",
+			wantErr: true,
+		},
+		{
+			name:    "missing fields",
+			stdout:  "16311 MiB, 12742 MiB\n",
+			wantErr: true,
+		},
+		{
+			name:    "exec error",
+			stdout:  "",
+			execErr: errors.New("nvidia-smi failed"),
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &Monitor{
+				exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+					if tc.execErr != nil {
+						return nil, tc.execErr
+					}
+					return []byte(tc.stdout), nil
+				},
+			}
+
+			got, err := m.Memory(context.Background())
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("expected %+v, got %+v", tc.want, got)
+			}
+		})
+	}
+}
+
 func TestProcesses(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -121,13 +182,13 @@ func TestProcesses(t *testing.T) {
 	}{
 		{
 			name: "three processes",
-			stdout: "11213, /app/.venv/bin/python3\n" +
-				"16131, whisper-server\n" +
-				"82497, llama-server\n",
+			stdout: "11213, /app/.venv/bin/python3, 1234 MiB\n" +
+				"16131, whisper-server, 567 MiB\n" +
+				"82497, llama-server, 12734 MiB\n",
 			want: []state.GPUProcess{
-				{PID: 11213, Name: "/app/.venv/bin/python3"},
-				{PID: 16131, Name: "whisper-server"},
-				{PID: 82497, Name: "llama-server"},
+				{PID: 11213, Name: "/app/.venv/bin/python3", UsedGPUMemory: "1234 MiB"},
+				{PID: 16131, Name: "whisper-server", UsedGPUMemory: "567 MiB"},
+				{PID: 82497, Name: "llama-server", UsedGPUMemory: "12734 MiB"},
 			},
 		},
 		{
@@ -137,23 +198,28 @@ func TestProcesses(t *testing.T) {
 		},
 		{
 			name:   "single process",
-			stdout: "1234, some-process\n",
-			want:   []state.GPUProcess{{PID: 1234, Name: "some-process"}},
+			stdout: "1234, some-process, 42 MiB\n",
+			want:   []state.GPUProcess{{PID: 1234, Name: "some-process", UsedGPUMemory: "42 MiB"}},
 		},
 		{
 			name:   "process name contains comma",
-			stdout: "11213, my, process\n",
-			want:   []state.GPUProcess{{PID: 11213, Name: "my, process"}},
+			stdout: "11213, my, process, 99 MiB\n",
+			want:   []state.GPUProcess{{PID: 11213, Name: "my, process", UsedGPUMemory: "99 MiB"}},
 		},
 		{
-			name:   "missing name field",
-			stdout: "11213\n",
+			name:   "missing memory field",
+			stdout: "11213, some-process\n",
 			want:   []state.GPUProcess{},
 		},
 		{
 			name:   "non-numeric pid",
-			stdout: "abc, some-process\n",
+			stdout: "abc, some-process, 1 MiB\n",
 			want:   []state.GPUProcess{},
+		},
+		{
+			name:   "N/A memory value",
+			stdout: "1234, some-process, N/A\n",
+			want:   []state.GPUProcess{{PID: 1234, Name: "some-process", UsedGPUMemory: "N/A"}},
 		},
 		{
 			name:    "exec error",

@@ -62,6 +62,9 @@ type fakeGPU struct {
 	processesErr     error
 	processesChecked bool
 	processesBlock   chan struct{}
+	memory           GPUMemory
+	memoryErr        error
+	memoryChecked    bool
 }
 
 func (f *fakeGPU) Status(ctx context.Context) (bool, string, error) {
@@ -91,6 +94,16 @@ func (f *fakeGPU) Processes(ctx context.Context) ([]GPUProcess, error) {
 		return nil, f.processesErr
 	}
 	return f.processes, nil
+}
+
+func (f *fakeGPU) Memory(ctx context.Context) (GPUMemory, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.memoryChecked = true
+	if f.memoryErr != nil {
+		return GPUMemory{}, f.memoryErr
+	}
+	return f.memory, nil
 }
 
 type recordingHandler struct {
@@ -2025,18 +2038,22 @@ func TestStatusIncludesGPUProcesses(t *testing.T) {
 		state        State
 		gpuPresent   bool
 		processes    []GPUProcess
+		memory       GPUMemory
 		wantCount    int
 		wantState    string
 		wantNonEmpty bool
+		wantMemory   bool
 	}{
 		{
 			name:         "ready with two processes",
 			state:        Ready,
 			gpuPresent:   true,
-			processes:    []GPUProcess{{PID: 1, Name: "a"}, {PID: 2, Name: "b"}},
+			processes:    []GPUProcess{{PID: 1, Name: "a", UsedGPUMemory: "1 MiB"}, {PID: 2, Name: "b", UsedGPUMemory: "2 MiB"}},
+			memory:       GPUMemory{Total: "16 MiB", Used: "3 MiB", Free: "13 MiB"},
 			wantCount:    2,
 			wantState:    "Ready",
 			wantNonEmpty: true,
+			wantMemory:   true,
 		},
 		{
 			name:         "off returns empty slice",
@@ -2046,15 +2063,29 @@ func TestStatusIncludesGPUProcesses(t *testing.T) {
 			wantCount:    0,
 			wantState:    "Off",
 			wantNonEmpty: true,
+			wantMemory:   false,
 		},
 		{
 			name:         "awaiting gpu free with one process",
 			state:        AwaitingGPUFree,
 			gpuPresent:   true,
-			processes:    []GPUProcess{{PID: 42, Name: "blocker"}},
+			processes:    []GPUProcess{{PID: 42, Name: "blocker", UsedGPUMemory: "5 MiB"}},
+			memory:       GPUMemory{Total: "16 MiB", Used: "5 MiB", Free: "11 MiB"},
 			wantCount:    1,
 			wantState:    "AwaitingGPUFree",
 			wantNonEmpty: true,
+			wantMemory:   true,
+		},
+		{
+			name:         "gpu present but no processes",
+			state:        Ready,
+			gpuPresent:   true,
+			processes:    []GPUProcess{},
+			memory:       GPUMemory{Total: "16 MiB", Used: "0 MiB", Free: "16 MiB"},
+			wantCount:    0,
+			wantState:    "Ready",
+			wantNonEmpty: true,
+			wantMemory:   false,
 		},
 	}
 
@@ -2064,6 +2095,7 @@ func TestStatusIncludesGPUProcesses(t *testing.T) {
 			m.state = tc.state
 			gpu.present = tc.gpuPresent
 			gpu.processes = tc.processes
+			gpu.memory = tc.memory
 
 			status := m.Status()
 			if status.State != tc.wantState {
@@ -2075,7 +2107,38 @@ func TestStatusIncludesGPUProcesses(t *testing.T) {
 			if status.GPUProcesses == nil && tc.wantNonEmpty {
 				t.Fatalf("expected non-nil gpuProcesses")
 			}
+			if tc.wantMemory {
+				if status.GPUMemory != tc.memory {
+					t.Fatalf("expected gpuMemory %+v, got %+v", tc.memory, status.GPUMemory)
+				}
+			} else {
+				if status.GPUMemory.Total != "" || status.GPUMemory.Used != "" || status.GPUMemory.Free != "" {
+					t.Fatalf("expected empty gpuMemory, got %+v", status.GPUMemory)
+				}
+			}
 		})
+	}
+}
+
+func TestStatusGPUMemoryProbeFailure(t *testing.T) {
+	m, _, gpu, _, _, _, handler := newTestMachineWithRecorder()
+	m.state = Ready
+	gpu.present = true
+	gpu.processes = []GPUProcess{{PID: 1, Name: "a", UsedGPUMemory: "1 MiB"}}
+	gpu.memoryErr = errors.New("nvidia-smi failed")
+
+	status := m.Status()
+	if len(status.GPUProcesses) != 1 {
+		t.Fatalf("expected 1 gpuProcess, got %d", len(status.GPUProcesses))
+	}
+	if status.GPUMemory.Total != "" || status.GPUMemory.Used != "" || status.GPUMemory.Free != "" {
+		t.Fatalf("expected empty gpuMemory on probe failure, got %+v", status.GPUMemory)
+	}
+	if !gpu.memoryChecked {
+		t.Fatalf("expected Memory to be called")
+	}
+	if !handler.hasRecord(slog.LevelDebug, "GPU memory probe failed") {
+		t.Fatalf("expected Debug log for GPU memory probe failure")
 	}
 }
 

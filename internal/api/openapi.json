@@ -236,10 +236,20 @@
               "type": "object",
               "properties": {
                 "pid": { "type": "integer" },
-                "name": { "type": "string" }
+                "name": { "type": "string" },
+                "usedGpuMemory": { "type": "string", "description": "GPU memory used by the process as reported by nvidia-smi (e.g. '12734 MiB' or 'N/A')." }
               }
             },
             "description": "Compute processes currently using the GPU. Empty array when the GPU is absent or no processes are running."
+          },
+          "gpuMemory": {
+            "type": "object",
+            "properties": {
+              "total": { "type": "string", "description": "Total GPU memory as reported by nvidia-smi (e.g. '16311 MiB')." },
+              "used": { "type": "string", "description": "Used GPU memory as reported by nvidia-smi (e.g. '12742 MiB')." },
+              "free": { "type": "string", "description": "Free GPU memory as reported by nvidia-smi (e.g. '3108 MiB')." }
+            },
+            "description": "Overall GPU memory usage. Empty strings when the GPU is absent or no compute processes are running."
           },
           "lastError": {
             "type": "string",

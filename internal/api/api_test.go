@@ -425,9 +425,41 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected components.schemas.StatusResponse.properties to be an object")
 		}
-		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "gpuProcesses", "lastError", "cooldownRemaining", "idleRemaining", "auxContainers"} {
+		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "gpuProcesses", "gpuMemory", "lastError", "cooldownRemaining", "idleRemaining", "auxContainers"} {
 			if _, ok := properties[field]; !ok {
 				t.Fatalf("expected StatusResponse properties to contain %q", field)
+			}
+		}
+
+		gpuProcesses, ok := properties["gpuProcesses"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected gpuProcesses to be an object")
+		}
+		gpuItems, ok := gpuProcesses["items"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected gpuProcesses.items to be an object")
+		}
+		gpuProps, ok := gpuItems["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected gpuProcesses.items.properties to be an object")
+		}
+		for _, field := range []string{"pid", "name", "usedGpuMemory"} {
+			if _, ok := gpuProps[field]; !ok {
+				t.Fatalf("expected gpuProcesses.items.properties to contain %q", field)
+			}
+		}
+
+		gpuMemory, ok := properties["gpuMemory"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected gpuMemory to be an object")
+		}
+		memProps, ok := gpuMemory["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected gpuMemory.properties to be an object")
+		}
+		for _, field := range []string{"total", "used", "free"} {
+			if _, ok := memProps[field]; !ok {
+				t.Fatalf("expected gpuMemory.properties to contain %q", field)
 			}
 		}
 
@@ -587,6 +619,12 @@ func TestWebUIRoutes(t *testing.T) {
 			"auxContainers",
 			"aux-card",
 			"Aux Containers",
+			"GPU processes",
+			"usedGpuMemory",
+			"gpuMemory",
+			"gpu-procs-memory",
+			"VRAM:",
+			"gpuProcesses",
 		} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("expected body to contain %q, got %q", want, body)
@@ -603,6 +641,9 @@ func TestWebUIRoutes(t *testing.T) {
 		}
 		if strings.Contains(body, "Health check") {
 			t.Fatalf("expected body to no longer contain the confusing label \"Health check\", got %q", body)
+		}
+		if strings.Contains(body, "preventing power off") {
+			t.Fatalf("expected body to NOT contain the misleading label \"preventing power off\", got %q", body)
 		}
 	})
 

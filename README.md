@@ -179,7 +179,18 @@ shows an auto-shutdown countdown. The countdown is hidden when the state is not
   "llamaSwapRunning": true,
   "llamaSwapHealthy": true,
   "loadedModels": ["qwen3.5-9b"],
-  "gpuProcesses": [],
+  "gpuProcesses": [
+    {
+      "pid": 492581,
+      "name": "llama-server",
+      "usedGpuMemory": "12734 MiB"
+    }
+  ],
+  "gpuMemory": {
+    "total": "16311 MiB",
+    "used": "12742 MiB",
+    "free": "3108 MiB"
+  },
   "lastError": null,
   "cooldownRemaining": 0,
   "idleRemaining": 0,

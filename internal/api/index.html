@@ -358,6 +358,12 @@
       margin-bottom: 0.25rem;
     }
 
+    .gpu-procs__memory {
+      margin: 0.25rem 0 0;
+      font-size: var(--fs-sm);
+      color: var(--muted);
+    }
+
     .aux {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -509,8 +515,9 @@
     </section>
 
     <section class="gpu-procs" id="gpu-procs-banner" hidden>
-      <p class="gpu-procs__label">GPU processes (preventing power off)</p>
+      <p class="gpu-procs__label">GPU processes</p>
       <ul class="gpu-procs__list" id="gpu-procs-list"></ul>
+      <p class="gpu-procs__memory" id="gpu-procs-memory"></p>
     </section>
 
     <section class="error" id="error-banner" hidden>
@@ -567,6 +574,7 @@
       errorMessage: document.getElementById("error-message"),
       gpuProcsBanner: document.getElementById("gpu-procs-banner"),
       gpuProcsList: document.getElementById("gpu-procs-list"),
+      gpuProcsMemory: document.getElementById("gpu-procs-memory"),
       auxCard: document.getElementById("aux-card"),
       auxList: document.getElementById("aux-list"),
       cooldown: document.getElementById("cooldown"),
@@ -682,11 +690,17 @@
       if (data.gpuProcesses && data.gpuProcesses.length > 0) {
         els.gpuProcsBanner.hidden = false;
         els.gpuProcsList.innerHTML = data.gpuProcesses
-          .map(p => `<li>${escapeHtml(p.name)} (PID ${p.pid})</li>`)
+          .map(p => `<li>${escapeHtml(p.name)} (PID ${p.pid}, ${escapeHtml(p.usedGpuMemory || "—")})</li>`)
           .join("");
+        if (data.gpuMemory && data.gpuMemory.total) {
+          els.gpuProcsMemory.textContent = `VRAM: ${data.gpuMemory.used} / ${data.gpuMemory.total} used (${data.gpuMemory.free} free)`;
+        } else {
+          els.gpuProcsMemory.textContent = "";
+        }
       } else {
         els.gpuProcsBanner.hidden = true;
         els.gpuProcsList.innerHTML = "";
+        els.gpuProcsMemory.textContent = "";
       }
 
       const auxEnabled = (data.state === "Off" || data.state === "Ready") && data.cooldownRemaining <= 0;

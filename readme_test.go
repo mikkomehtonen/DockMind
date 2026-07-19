@@ -55,6 +55,8 @@ func TestREADME(t *testing.T) {
 		{"status example includes cooldownRemaining field", "cooldownRemaining", true},
 		{"status example includes idleRemaining field", "idleRemaining", true},
 		{"status example includes gpuProcesses field", "gpuProcesses", true},
+		{"status example includes usedGpuMemory field", "usedGpuMemory", true},
+		{"status example includes gpuMemory field", "gpuMemory", true},
 		{"status example includes auxContainers field", "auxContainers", true},
 		{"documents cooldown feature", "cooldown", true},
 		{"documents idle countdown feature", "idleRemaining", true},
