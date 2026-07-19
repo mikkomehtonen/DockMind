@@ -753,7 +753,8 @@
         els.gpuProcsVramBar.hidden = true;
       }
 
-      const auxEnabled = (data.state === "Off" || data.state === "Ready") && data.cooldownRemaining <= 0;
+      const auxStartEnabled = (data.state === "Ready") && data.cooldownRemaining <= 0;
+      const auxStopEnabled = (data.state === "Off" || data.state === "Ready") && data.cooldownRemaining <= 0;
       if (data.auxContainers && data.auxContainers.length > 0) {
         els.auxCard.hidden = false;
         els.auxList.innerHTML = data.auxContainers
@@ -767,8 +768,8 @@
                 <span class="aux__label">${escapeHtml(c.name)}</span>
                 <span class="aux__value">${statusText}</span>
                 <div class="aux__actions">
-                  <button class="btn btn--primary aux-btn-start" data-name="${escapeHtml(c.name)}" ${running || !auxEnabled ? "disabled" : ""}>Start</button>
-                  <button class="btn btn--danger aux-btn-stop" data-name="${escapeHtml(c.name)}" ${!running || !auxEnabled ? "disabled" : ""}>Stop</button>
+                  <button class="btn btn--primary aux-btn-start" data-name="${escapeHtml(c.name)}" ${running || !auxStartEnabled ? "disabled" : ""}>Start</button>
+                  <button class="btn btn--danger aux-btn-stop" data-name="${escapeHtml(c.name)}" ${!running || !auxStopEnabled ? "disabled" : ""}>Stop</button>
                 </div>
               </div>
             `;
@@ -873,7 +874,7 @@
         const res = await fetch(endpoint, { method: "POST" });
         if (res.status === 200)      showFeedback(label + " done");
         else if (res.status === 404) showFeedback("Container not found");
-        else if (res.status === 409) showFeedback("Not allowed right now");
+        else if (res.status === 409) showFeedback(action === "start" ? "GPU not ready — power on first" : "Not allowed right now");
         else                         showFeedback("Unexpected response");
       } catch (e) {
         showFeedback("Request failed");

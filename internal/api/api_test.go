@@ -501,6 +501,54 @@ func TestSwaggerRoutes(t *testing.T) {
 			}
 		}
 
+		startPath, ok := paths["/containers/{name}/start"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected path %q to be an object", "/containers/{name}/start")
+		}
+		startPost, ok := startPath["post"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected %q POST to be an object", "/containers/{name}/start")
+		}
+		startResponses, ok := startPost["responses"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected %q responses to be an object", "/containers/{name}/start")
+		}
+		start409, ok := startResponses["409"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected %q 409 response to be an object", "/containers/{name}/start")
+		}
+		start409Desc, ok := start409["description"].(string)
+		if !ok {
+			t.Fatalf("expected %q 409 description to be a string", "/containers/{name}/start")
+		}
+		if !strings.Contains(start409Desc, "Ready") {
+			t.Fatalf("expected %q 409 description to mention Ready, got %q", "/containers/{name}/start", start409Desc)
+		}
+
+		stopPath, ok := paths["/containers/{name}/stop"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected path %q to be an object", "/containers/{name}/stop")
+		}
+		stopPost, ok := stopPath["post"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected %q POST to be an object", "/containers/{name}/stop")
+		}
+		stopResponses, ok := stopPost["responses"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected %q responses to be an object", "/containers/{name}/stop")
+		}
+		stop409, ok := stopResponses["409"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected %q 409 response to be an object", "/containers/{name}/stop")
+		}
+		stop409Desc, ok := stop409["description"].(string)
+		if !ok {
+			t.Fatalf("expected %q 409 description to be a string", "/containers/{name}/stop")
+		}
+		if strings.Contains(stop409Desc, "Ready") {
+			t.Fatalf("expected %q 409 description NOT to mention Ready, got %q", "/containers/{name}/stop", stop409Desc)
+		}
+
 		openAIError, ok := schemas["OpenAIError"].(map[string]any)
 		if !ok {
 			t.Fatalf("expected components.schemas.OpenAIError to be an object")
@@ -544,6 +592,43 @@ func TestWebUIAuxCard(t *testing.T) {
 		`encodeURIComponent`,
 		`Running`,
 		`Stopped`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected body to contain %q", want)
+		}
+	}
+}
+
+func TestWebUIAuxStartGatedOnReady(t *testing.T) {
+	server := NewServer(&fakeStateMachine{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`const auxStartEnabled = (data.state === "Ready") && data.cooldownRemaining <= 0;`,
+		`const auxStopEnabled = (data.state === "Off" || data.state === "Ready") && data.cooldownRemaining <= 0;`,
+		`${running || !auxStartEnabled ? "disabled" : ""}`,
+		`${!running || !auxStopEnabled ? "disabled" : ""}`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected body to contain %q", want)
+		}
+	}
+}
+
+func TestWebUIAuxStartFeedbackMessage(t *testing.T) {
+	server := NewServer(&fakeStateMachine{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`showFeedback(action === "start" ? "GPU not ready — power on first" : "Not allowed right now");`,
+		`showFeedback("Container not found");`,
+		`showFeedback(label + " done");`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected body to contain %q", want)

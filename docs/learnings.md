@@ -90,4 +90,10 @@
 **What happened**: In `TestCooldown`, subtests that expected `ResultAccepted` launched real startup/shutdown goroutines and then immediately asserted the pre-transition state (`Off`/`Ready`). This violated the repo convention to call `m.Wait()` before asserting final state, created a scheduling-order race under `GOMAXPROCS>1`, and caused subtests to run for 500ms each when the fakes were not configured as healthy.
 **Takeaway**: In table-driven state tests, branch on the result: for `ResultAccepted`, call `m.Wait()` and assert the final state (`Ready` after `PowerOn`/`Restart`, `Off` after `PowerOff`); for `ResultAlreadyInState`/`ResultConflict`/`ResultCooldown`, assert the unchanged state immediately. Also configure the fakes (`gpu.present`, `health.healthy`) so async transitions complete quickly when the test does wait.
 
+## UI behavior tests use source-code string checks, not JS execution
+**Date**: 2026-07-19
+**Area**: testing / web UI
+**What happened**: Story 021 required testing web UI button enablement and feedback messages for different state inputs. The project has no JS test runner and only Go stdlib tests, so the new tests (`TestWebUIAuxStartGatedOnReady`, `TestWebUIAuxStartFeedbackMessage`) verify the exact JS source strings and conditional patterns in the served HTML rather than executing `render()` or `doAuxAction()`.
+**Takeaway**: For web UI stories, test dynamic behavior by asserting the presence of the expected JS logic in the served HTML. Do not add a JS test runner or external browser dependency; keep UI tests as Go string-presence checks that pin the exact conditional expressions and message strings.
+
 

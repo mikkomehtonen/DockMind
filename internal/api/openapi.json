@@ -116,7 +116,7 @@
             "description": "Unknown container"
           },
           "409": {
-            "description": "Conflict — power transition in progress or state does not allow aux operations"
+            "description": "Conflict — power transition in progress, or system not in the Ready state (aux containers require the GPU to be detected and the inference backend healthy)"
           },
           "500": {
             "description": "Docker start failed"

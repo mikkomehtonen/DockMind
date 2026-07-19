@@ -113,6 +113,8 @@ DockMind can track optional Docker containers (for example a text-to-speech or
 speech-to-text service) that are started and stopped on demand. They are not
 started automatically during power-on, but any running aux containers are stopped
 during the shutdown sequence before the GPU-process check and Shelly power-off.
+Aux containers can be started only when the system is Ready (GPU detected and the
+inference backend healthy), and can be stopped in either the Off or Ready state.
 
 ```yaml
 auxContainers:

@@ -2302,12 +2302,13 @@ func TestStartAuxContainer(t *testing.T) {
 		wantStart bool
 	}{
 		{"Ready start kokoro", Ready, "kokoro", AuxResultOK, true},
-		{"Off start whisper", Off, "whisper", AuxResultOK, true},
+		{"Off start whisper", Off, "whisper", AuxResultConflict, false},
 		{"Starting conflict", Starting, "kokoro", AuxResultConflict, false},
 		{"ShuttingDown conflict", ShuttingDown, "kokoro", AuxResultConflict, false},
 		{"Error conflict", Error, "kokoro", AuxResultConflict, false},
 		{"AwaitingGPUFree conflict", AwaitingGPUFree, "kokoro", AuxResultConflict, false},
-		{"unknown not found", Ready, "unknown", AuxResultNotFound, false},
+		{"unknown not found Ready", Ready, "unknown", AuxResultNotFound, false},
+		{"unknown not found Off", Off, "unknown", AuxResultNotFound, false},
 	}
 
 	for _, tc := range cases {
@@ -2349,6 +2350,8 @@ func TestStopAuxContainer(t *testing.T) {
 		{"Off stop kokoro", Off, "kokoro", AuxResultOK, true},
 		{"Starting conflict", Starting, "kokoro", AuxResultConflict, false},
 		{"ShuttingDown conflict", ShuttingDown, "kokoro", AuxResultConflict, false},
+		{"Error conflict", Error, "kokoro", AuxResultConflict, false},
+		{"AwaitingGPUFree conflict", AwaitingGPUFree, "kokoro", AuxResultConflict, false},
 		{"unknown not found", Ready, "unknown", AuxResultNotFound, false},
 	}
 

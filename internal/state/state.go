@@ -411,8 +411,14 @@ func (m *Machine) doAuxOperation(name string, start bool) AuxResult {
 	current := m.state
 	m.stateMu.Unlock()
 
-	if current != Off && current != Ready {
-		return AuxResultConflict
+	if start {
+		if current != Ready {
+			return AuxResultConflict
+		}
+	} else {
+		if current != Off && current != Ready {
+			return AuxResultConflict
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
