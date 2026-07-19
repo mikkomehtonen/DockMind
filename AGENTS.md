@@ -56,7 +56,8 @@ State machine concurrency: `transitionMu` is acquired with `TryLock()` and held 
 - `POST /restart` is a single atomic async operation (shutdown then startup) holding `transitionMu` for the full duration — not two sequential calls.
 - No background polling: `GET /status` queries all four dependencies live on every call. Unreachable dependencies default to safe values (`false`/empty); `state` always reflects the state machine. `GET /status` also reports `idleRemaining` (seconds before an idle auto-shutdown; 0 when not applicable) alongside `cooldownRemaining`.
 - `gpu.pollInterval` is reused as the polling interval for all transition wait loops, not just `/status`.
-- The shutdown sequence unbinds the eGPU driver via `dockmind-egpu-unbind.service` before cutting Shelly power. If the unbind fails, the machine enters the Error state and Shelly power is not cut.
+- The shutdown sequence stops `llama-swap`, then checks `nvidia-smi` for compute processes still using the GPU. If any are found, the machine enters `AwaitingGPUFree` and polls every `shutdown.gpuFreeCheckInterval` (default 5m) until the GPU is clear, then unbinds the eGPU driver via `dockmind-egpu-unbind.service` and cuts Shelly power. If the unbind fails, the machine enters the Error state and Shelly power is not cut.
+- From `AwaitingGPUFree`, `POST /power/on` and `POST /restart` resume startup (202 Accepted); `POST /power/off` is an idempotent no-op (200 OK) because the system is already shutting down.
 
 ## Config
 

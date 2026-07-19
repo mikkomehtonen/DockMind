@@ -64,7 +64,8 @@ type StartupConfig struct {
 }
 
 type ShutdownConfig struct {
-	Timeout Duration `yaml:"timeout"`
+	Timeout              Duration `yaml:"timeout"`
+	GPUFreeCheckInterval Duration `yaml:"gpuFreeCheckInterval"`
 }
 
 type PowerConfig struct {
@@ -116,6 +117,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Shutdown.Timeout == 0 {
 		cfg.Shutdown.Timeout = Duration(30 * time.Second)
 	}
+	if cfg.Shutdown.GPUFreeCheckInterval == 0 {
+		cfg.Shutdown.GPUFreeCheckInterval = Duration(5 * time.Minute)
+	}
 	if cfg.Gateway.Enabled && cfg.Gateway.RequestTimeout == 0 {
 		cfg.Gateway.RequestTimeout = Duration(120 * time.Second)
 	}
@@ -142,6 +146,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Shutdown.Timeout <= 0 {
 		return errors.New("shutdown.timeout must be positive")
+	}
+	if cfg.Shutdown.GPUFreeCheckInterval <= 0 {
+		return errors.New("shutdown.gpuFreeCheckInterval must be positive")
 	}
 	if cfg.Power.Cooldown < 0 {
 		return errors.New("power.cooldown must be >= 0")

@@ -1,10 +1,10 @@
 # Learnings
 
-## Hold transitionMu for the full async transition
-**Date**: 2026-07-08
+## Atomic resume-check + state transition under stateMu
+**Date**: 2026-07-19
 **Area**: concurrency / state machine
-**What happened**: The first implementation acquired `transitionMu` in `PowerOn`/`PowerOff`/`Restart` and released it with `defer` before the async goroutine finished. Concurrent requests could then race past the in-flight transition and return wrong results, and `Wait()`/`WaitGroup` accounting became fragile.
-**Takeaway**: When a method spawns an async goroutine, acquire the lock in the caller, pass ownership to the goroutine (which `defer`s the unlock), and never release it in the synchronous path. Add `wg.Add(1)` synchronously before `go`, and `defer wg.Done()` in the goroutine wrapper.
+**What happened**: In story 017, `awaitGpuFree()` returned "GPU free" and then `shutdown()` called `setState(ShuttingDown)`. A `PowerOn`/`Restart` arriving in that window saw `AwaitingGPUFree`, set `resumeStartup=true`, and returned `202 Accepted`, but the flag was not re-checked before the state transition, so the machine powered off instead of resuming.
+**Takeaway**: When a state-machine decision and the following state transition are separately guarded, a signal that should override the decision can arrive between them. Hold the state lock across both the override check and the transition (or use a dedicated `setStateOrResume` helper) so the override is either observed or atomically prevented.
 
 ## Code reviewer expects context propagation, timeouts, and error logging by default
 **Date**: 2026-07-08

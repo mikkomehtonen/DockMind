@@ -54,10 +54,14 @@ func (f *fakePower) IsOn(ctx context.Context) (bool, error) {
 }
 
 type fakeGPU struct {
-	mu      sync.Mutex
-	present bool
-	name    string
-	err     error
+	mu               sync.Mutex
+	present          bool
+	name             string
+	err              error
+	processes        []GPUProcess
+	processesErr     error
+	processesChecked bool
+	processesBlock   chan struct{}
 }
 
 func (f *fakeGPU) Status(ctx context.Context) (bool, string, error) {
@@ -67,6 +71,26 @@ func (f *fakeGPU) Status(ctx context.Context) (bool, string, error) {
 		return true, f.name, nil
 	}
 	return false, "", f.err
+}
+
+func (f *fakeGPU) Processes(ctx context.Context) ([]GPUProcess, error) {
+	f.mu.Lock()
+	block := f.processesBlock
+	f.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.processesChecked = true
+	if f.processesErr != nil {
+		return nil, f.processesErr
+	}
+	return f.processes, nil
 }
 
 type recordingHandler struct {
@@ -191,7 +215,7 @@ func newTestMachineWithCooldown(cooldown time.Duration) (*Machine, *fakePower, *
 	health := &fakeHealth{}
 	unbinder := &fakeUnbinder{}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	m := New(power, gpu, docker, health, unbinder, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, cooldown)
+	m := New(power, gpu, docker, health, unbinder, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, 10*time.Millisecond, cooldown)
 	return m, power, gpu, docker, health, unbinder
 }
 
@@ -204,7 +228,7 @@ func newTestMachineWithRecorder() (*Machine, *fakePower, *fakeGPU, *fakeDocker, 
 	unbinder := &fakeUnbinder{}
 	handler := &recordingHandler{}
 	logger := slog.New(handler)
-	m := New(power, gpu, docker, health, unbinder, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, 0)
+	m := New(power, gpu, docker, health, unbinder, logger, 10*time.Millisecond, 500*time.Millisecond, 500*time.Millisecond, 10*time.Millisecond, 0)
 	return m, power, gpu, docker, health, unbinder, handler
 }
 
@@ -693,6 +717,7 @@ func TestStatusProbeLogLevels(t *testing.T) {
 		{name: "Off", state: Off, quiet: true},
 		{name: "Starting", state: Starting, quiet: true},
 		{name: "ShuttingDown", state: ShuttingDown, quiet: true},
+		{name: "AwaitingGPUFree", state: AwaitingGPUFree, quiet: true},
 		{name: "Ready", state: Ready, quiet: false},
 		{name: "Error", state: Error, quiet: false},
 	}
@@ -970,6 +995,7 @@ func TestState(t *testing.T) {
 		{Starting, "Starting"},
 		{Ready, "Ready"},
 		{ShuttingDown, "ShuttingDown"},
+		{AwaitingGPUFree, "AwaitingGPUFree"},
 		{Error, "Error"},
 	}
 
@@ -1626,5 +1652,504 @@ func TestCooldown_EnsureReadyCanceled(t *testing.T) {
 	err := m.EnsureReady(ctx)
 	if err != context.Canceled {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestShutdownGPUFreeEmpty(t *testing.T) {
+	m, power, gpu, docker, _, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off, got %v", m.state)
+	}
+	if power.on {
+		t.Fatalf("expected power off")
+	}
+	if unbinder.calls != 1 {
+		t.Fatalf("expected unbind called once, got %d", unbinder.calls)
+	}
+}
+
+func TestShutdownAwaitingGPUFreeThenClear(t *testing.T) {
+	m, power, gpu, docker, _, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	gpu.processes = []GPUProcess{{PID: 1234, Name: "python"}}
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	// Wait for state to become AwaitingGPUFree.
+	for i := 0; i < 100; i++ {
+		if m.State() == AwaitingGPUFree {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != AwaitingGPUFree {
+		t.Fatalf("expected AwaitingGPUFree, got %v", m.State())
+	}
+
+	gpu.mu.Lock()
+	gpu.processes = []GPUProcess{}
+	gpu.mu.Unlock()
+
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off, got %v", m.state)
+	}
+	if power.on {
+		t.Fatalf("expected power off")
+	}
+	if unbinder.calls != 1 {
+		t.Fatalf("expected unbind called once, got %d", unbinder.calls)
+	}
+}
+
+func TestShutdownAwaitingGPUFreePowerOnResumes(t *testing.T) {
+	m, power, gpu, docker, health, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	health.healthy = true
+	gpu.processes = []GPUProcess{{PID: 1234, Name: "python"}}
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	for i := 0; i < 100; i++ {
+		if m.State() == AwaitingGPUFree {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != AwaitingGPUFree {
+		t.Fatalf("expected AwaitingGPUFree, got %v", m.State())
+	}
+
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected PowerOn ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready, got %v", m.state)
+	}
+	if !power.on {
+		t.Fatalf("expected power on")
+	}
+	if unbinder.calls != 0 {
+		t.Fatalf("expected unbind not called, got %d", unbinder.calls)
+	}
+}
+
+func TestShutdownAwaitingGPUFreeRestartResumes(t *testing.T) {
+	m, power, gpu, docker, health, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	health.healthy = true
+	gpu.processes = []GPUProcess{{PID: 1234, Name: "python"}}
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	for i := 0; i < 100; i++ {
+		if m.State() == AwaitingGPUFree {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != AwaitingGPUFree {
+		t.Fatalf("expected AwaitingGPUFree, got %v", m.State())
+	}
+
+	if got := m.Restart(); got != ResultAccepted {
+		t.Fatalf("expected Restart ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready, got %v", m.state)
+	}
+	if unbinder.calls != 0 {
+		t.Fatalf("expected unbind not called, got %d", unbinder.calls)
+	}
+}
+
+func TestShutdownAwaitingGPUFreePowerOffAlreadyInState(t *testing.T) {
+	m, _, gpu, docker, _, _ := newTestMachine()
+	m.state = Ready
+	gpu.present = true
+	docker.running = true
+	gpu.processes = []GPUProcess{{PID: 1234, Name: "python"}}
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	for i := 0; i < 100; i++ {
+		if m.State() == AwaitingGPUFree {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != AwaitingGPUFree {
+		t.Fatalf("expected AwaitingGPUFree, got %v", m.State())
+	}
+
+	if got := m.PowerOff(); got != ResultAlreadyInState {
+		t.Fatalf("expected ResultAlreadyInState, got %v", got)
+	}
+	if m.State() != AwaitingGPUFree {
+		t.Fatalf("expected state to remain AwaitingGPUFree, got %v", m.State())
+	}
+
+	gpu.mu.Lock()
+	gpu.processes = []GPUProcess{}
+	gpu.mu.Unlock()
+	m.Wait()
+}
+
+func TestShutdownGPUProcessError(t *testing.T) {
+	m, power, gpu, docker, _, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	gpu.processesErr = errors.New("nvidia-smi failed")
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Error {
+		t.Fatalf("expected Error, got %v", m.state)
+	}
+	assertLastErrorContains(t, m.lastError, "gpu process")
+	if !power.on {
+		t.Fatalf("expected power to remain on")
+	}
+	if unbinder.calls != 0 {
+		t.Fatalf("expected unbind not called, got %d", unbinder.calls)
+	}
+}
+
+func TestRestartAwaitingGPUFreeThenClear(t *testing.T) {
+	m, power, gpu, docker, health, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	health.healthy = true
+	gpu.processes = []GPUProcess{{PID: 1234, Name: "python"}}
+
+	if got := m.Restart(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	for i := 0; i < 100; i++ {
+		if m.State() == AwaitingGPUFree {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != AwaitingGPUFree {
+		t.Fatalf("expected AwaitingGPUFree, got %v", m.State())
+	}
+
+	gpu.mu.Lock()
+	gpu.processes = []GPUProcess{}
+	gpu.mu.Unlock()
+
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready, got %v", m.state)
+	}
+	if unbinder.calls != 1 {
+		t.Fatalf("expected unbind called once, got %d", unbinder.calls)
+	}
+}
+
+func TestRestartAwaitingGPUFreePowerOnResumes(t *testing.T) {
+	m, power, gpu, docker, health, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	health.healthy = true
+	gpu.processes = []GPUProcess{{PID: 1234, Name: "python"}}
+
+	if got := m.Restart(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	for i := 0; i < 100; i++ {
+		if m.State() == AwaitingGPUFree {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != AwaitingGPUFree {
+		t.Fatalf("expected AwaitingGPUFree, got %v", m.State())
+	}
+
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected PowerOn ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready, got %v", m.state)
+	}
+	if unbinder.calls != 0 {
+		t.Fatalf("expected unbind not called, got %d", unbinder.calls)
+	}
+}
+
+func TestShutdownDockerStopErrorDoesNotCheckGPUProcesses(t *testing.T) {
+	m, _, gpu, docker, _, _ := newTestMachine()
+	m.state = Ready
+	docker.running = true
+	docker.stopErr = errors.New("stop failed")
+	gpu.processesChecked = false
+
+	m.PowerOff()
+	m.Wait()
+
+	if m.state != Error {
+		t.Fatalf("expected Error, got %v", m.state)
+	}
+	if gpu.processesChecked {
+		t.Fatalf("expected Processes not called when docker stop fails")
+	}
+}
+
+func TestStatusIncludesGPUProcesses(t *testing.T) {
+	cases := []struct {
+		name         string
+		state        State
+		gpuPresent   bool
+		processes    []GPUProcess
+		wantCount    int
+		wantState    string
+		wantNonEmpty bool
+	}{
+		{
+			name:         "ready with two processes",
+			state:        Ready,
+			gpuPresent:   true,
+			processes:    []GPUProcess{{PID: 1, Name: "a"}, {PID: 2, Name: "b"}},
+			wantCount:    2,
+			wantState:    "Ready",
+			wantNonEmpty: true,
+		},
+		{
+			name:         "off returns empty slice",
+			state:        Off,
+			gpuPresent:   false,
+			processes:    []GPUProcess{},
+			wantCount:    0,
+			wantState:    "Off",
+			wantNonEmpty: true,
+		},
+		{
+			name:         "awaiting gpu free with one process",
+			state:        AwaitingGPUFree,
+			gpuPresent:   true,
+			processes:    []GPUProcess{{PID: 42, Name: "blocker"}},
+			wantCount:    1,
+			wantState:    "AwaitingGPUFree",
+			wantNonEmpty: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, gpu, _, _, _ := newTestMachine()
+			m.state = tc.state
+			gpu.present = tc.gpuPresent
+			gpu.processes = tc.processes
+
+			status := m.Status()
+			if status.State != tc.wantState {
+				t.Fatalf("expected state %q, got %q", tc.wantState, status.State)
+			}
+			if len(status.GPUProcesses) != tc.wantCount {
+				t.Fatalf("expected %d gpuProcesses, got %d", tc.wantCount, len(status.GPUProcesses))
+			}
+			if status.GPUProcesses == nil && tc.wantNonEmpty {
+				t.Fatalf("expected non-nil gpuProcesses")
+			}
+		})
+	}
+}
+
+func TestStatusGPUProcessesJSONNotNull(t *testing.T) {
+	m, _, gpu, _, _, _ := newTestMachine()
+	m.state = Off
+	gpu.present = false
+
+	status := m.Status()
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+	if !strings.Contains(string(data), `"gpuProcesses":[]`) {
+		t.Fatalf("expected JSON to contain \"gpuProcesses\":[], got %s", string(data))
+	}
+}
+
+func TestShutdownAwaitingGPUFreeResumeDuringFirstCheck(t *testing.T) {
+	m, power, gpu, docker, health, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	health.healthy = true
+	gpu.processes = []GPUProcess{} // empty so first check would return free
+	gpu.processesBlock = make(chan struct{})
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	// Wait until the shutdown goroutine is blocked inside the first Processes call.
+	for i := 0; i < 100; i++ {
+		if m.State() == AwaitingGPUFree {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != AwaitingGPUFree {
+		t.Fatalf("expected AwaitingGPUFree, got %v", m.State())
+	}
+
+	// Issue PowerOn while the first GPU process check is blocked.
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected PowerOn ResultAccepted, got %v", got)
+	}
+
+	// Unblock the first Processes call.
+	close(gpu.processesBlock)
+
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready (resume honored), got %v", m.state)
+	}
+	if !power.on {
+		t.Fatalf("expected power on")
+	}
+	if unbinder.calls != 0 {
+		t.Fatalf("expected unbind not called, got %d", unbinder.calls)
+	}
+}
+
+func TestShutdownAwaitingGPUFreeResumeDuringTickerCheck(t *testing.T) {
+	m, power, gpu, docker, health, unbinder := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	health.healthy = true
+	gpu.processes = []GPUProcess{{PID: 1234, Name: "python"}}
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	for i := 0; i < 100; i++ {
+		if m.State() == AwaitingGPUFree {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != AwaitingGPUFree {
+		t.Fatalf("expected AwaitingGPUFree, got %v", m.State())
+	}
+
+	// Clear processes and block the next Processes call so we can issue PowerOn
+	// while awaitGpuFree is between the "free" decision and the state transition.
+	gpu.mu.Lock()
+	gpu.processes = []GPUProcess{}
+	gpu.processesBlock = make(chan struct{})
+	gpu.mu.Unlock()
+
+	// Wait for the ticker to fire and block inside Processes.
+	time.Sleep(25 * time.Millisecond)
+
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected PowerOn ResultAccepted, got %v", got)
+	}
+
+	close(gpu.processesBlock)
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready (resume honored in ticker loop), got %v", m.state)
+	}
+	if !power.on {
+		t.Fatalf("expected power on")
+	}
+	if unbinder.calls != 0 {
+		t.Fatalf("expected unbind not called, got %d", unbinder.calls)
+	}
+}
+
+func TestEnsureReadyFromAwaitingGPUFree(t *testing.T) {
+	m, power, gpu, docker, health, _ := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	health.healthy = true
+	gpu.processes = []GPUProcess{{PID: 1234, Name: "python"}}
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	for i := 0; i < 100; i++ {
+		if m.State() == AwaitingGPUFree {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != AwaitingGPUFree {
+		t.Fatalf("expected AwaitingGPUFree, got %v", m.State())
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- m.EnsureReady(context.Background())
+	}()
+
+	m.Wait()
+
+	err := <-done
+	if err != nil {
+		t.Fatalf("EnsureReady returned error: %v", err)
+	}
+	if m.State() != Ready {
+		t.Fatalf("expected Ready, got %v", m.State())
 	}
 }

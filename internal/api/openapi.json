@@ -150,7 +150,7 @@
         "properties": {
           "state": {
             "type": "string",
-            "enum": ["Off", "Starting", "Ready", "ShuttingDown", "Error"]
+            "enum": ["Off", "Starting", "Ready", "ShuttingDown", "AwaitingGPUFree", "Error"]
           },
           "gpuPresent": {
             "type": "boolean"
@@ -171,6 +171,17 @@
             "type": "array",
             "items": { "type": "string" },
             "description": "Models currently loaded in llama-swap, extracted from the /running endpoint. Empty array when no models are loaded or the service is unhealthy."
+          },
+          "gpuProcesses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "pid": { "type": "integer" },
+                "name": { "type": "string" }
+              }
+            },
+            "description": "Compute processes currently using the GPU. Empty array when the GPU is absent or no processes are running."
           },
           "lastError": {
             "type": "string",

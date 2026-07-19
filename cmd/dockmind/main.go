@@ -49,6 +49,7 @@ func main() {
 		cfg.GPU.PollInterval.Duration(),
 		cfg.Startup.Timeout.Duration(),
 		cfg.Shutdown.Timeout.Duration(),
+		cfg.Shutdown.GPUFreeCheckInterval.Duration(),
 		cfg.Power.Cooldown.Duration(),
 	)
 

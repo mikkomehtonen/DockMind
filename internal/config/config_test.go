@@ -43,7 +43,7 @@ shutdown:
 				LlamaSwap: LlamaSwapConfig{HealthURL: "http://localhost:1234/v1/models"},
 				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
 				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
-				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second)},
+				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second), GPUFreeCheckInterval: Duration(5 * time.Minute)},
 				Power:     PowerConfig{Cooldown: Duration(0)},
 			},
 		},
@@ -63,7 +63,7 @@ llamaSwap:
 				LlamaSwap: LlamaSwapConfig{HealthURL: "http://localhost:1234/v1/models"},
 				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
 				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
-				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second)},
+				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second), GPUFreeCheckInterval: Duration(5 * time.Minute)},
 				Power:     PowerConfig{Cooldown: Duration(0)},
 			},
 		},
@@ -131,7 +131,7 @@ power:
 				LlamaSwap: LlamaSwapConfig{HealthURL: "http://localhost:1234/v1/models"},
 				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
 				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
-				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second)},
+				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second), GPUFreeCheckInterval: Duration(5 * time.Minute)},
 				Power:     PowerConfig{Cooldown: Duration(60 * time.Second)},
 			},
 		},
@@ -151,7 +151,7 @@ llamaSwap:
 				LlamaSwap: LlamaSwapConfig{HealthURL: "http://localhost:1234/v1/models"},
 				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
 				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
-				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second)},
+				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second), GPUFreeCheckInterval: Duration(5 * time.Minute)},
 				Power:     PowerConfig{Cooldown: Duration(0)},
 			},
 		},
@@ -173,7 +173,7 @@ power:
 				LlamaSwap: LlamaSwapConfig{HealthURL: "http://localhost:1234/v1/models"},
 				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
 				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
-				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second)},
+				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second), GPUFreeCheckInterval: Duration(5 * time.Minute)},
 				Power:     PowerConfig{Cooldown: Duration(0)},
 			},
 		},
@@ -190,6 +190,84 @@ power:
 `,
 			wantErr: true,
 			errSub:  "power.cooldown",
+		},
+		{
+			name: "gpuFreeCheckInterval absent defaults to 5m",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+`,
+			want: Config{
+				Server:    ServerConfig{Address: ":8080"},
+				Shelly:    ShellyConfig{Address: "192.168.1.50", Channel: 0},
+				Docker:    DockerConfig{Container: "llama-swap"},
+				LlamaSwap: LlamaSwapConfig{HealthURL: "http://localhost:1234/v1/models"},
+				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
+				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
+				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second), GPUFreeCheckInterval: Duration(5 * time.Minute)},
+				Power:     PowerConfig{Cooldown: Duration(0)},
+			},
+		},
+		{
+			name: "gpuFreeCheckInterval 2m",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+shutdown:
+  gpuFreeCheckInterval: 2m
+`,
+			want: Config{
+				Server:    ServerConfig{Address: ":8080"},
+				Shelly:    ShellyConfig{Address: "192.168.1.50", Channel: 0},
+				Docker:    DockerConfig{Container: "llama-swap"},
+				LlamaSwap: LlamaSwapConfig{HealthURL: "http://localhost:1234/v1/models"},
+				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
+				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
+				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second), GPUFreeCheckInterval: Duration(2 * time.Minute)},
+				Power:     PowerConfig{Cooldown: Duration(0)},
+			},
+		},
+		{
+			name: "gpuFreeCheckInterval 0s defaults to 5m",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+shutdown:
+  gpuFreeCheckInterval: 0s
+`,
+			want: Config{
+				Server:    ServerConfig{Address: ":8080"},
+				Shelly:    ShellyConfig{Address: "192.168.1.50", Channel: 0},
+				Docker:    DockerConfig{Container: "llama-swap"},
+				LlamaSwap: LlamaSwapConfig{HealthURL: "http://localhost:1234/v1/models"},
+				GPU:       GPUConfig{PollInterval: Duration(time.Second)},
+				Startup:   StartupConfig{Timeout: Duration(60 * time.Second)},
+				Shutdown:  ShutdownConfig{Timeout: Duration(30 * time.Second), GPUFreeCheckInterval: Duration(5 * time.Minute)},
+				Power:     PowerConfig{Cooldown: Duration(0)},
+			},
+		},
+		{
+			name: "negative gpuFreeCheckInterval fails",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+shutdown:
+  gpuFreeCheckInterval: -1s
+`,
+			wantErr: true,
+			errSub:  "gpuFreeCheckInterval",
 		},
 	}
 

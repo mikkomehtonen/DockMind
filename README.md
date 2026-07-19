@@ -6,7 +6,7 @@ DockMind is a lightweight daemon that manages the lifecycle of an AI inference s
 
 - **eGPU Power Control** — power the eGPU on/off via a Shelly Plug Gen3 on the local network.
 - **Inference Backend Lifecycle** — start and stop the `llama-swap` Docker container through the Docker CLI.
-- **Deterministic State Machine** — tracks Off / Starting / Ready / ShuttingDown / Error states with single-transition concurrency.
+- **Deterministic State Machine** — tracks Off / Starting / Ready / ShuttingDown / AwaitingGPUFree / Error states with single-transition concurrency.
 - **REST API** — simple HTTP endpoints for status, power control, restart, and daemon health.
 - **GPU Monitoring** — detects GPU availability and name via `nvidia-smi`.
 - **Health Monitoring** — checks `llama-swap` readiness through its `/running` endpoint and reports the currently loaded model name(s) in status and the web UI.
@@ -48,7 +48,7 @@ make lint
 |--------|------|-------------|
 | GET | `/status` | Current system state and component health |
 | POST | `/power/on` | Power on the eGPU and start `llama-swap` |
-| POST | `/power/off` | Stop `llama-swap`, unbind the NVIDIA driver via `dockmind-egpu-unbind.service`, then cut Shelly power. A failed unbind aborts shutdown to Error. |
+| POST | `/power/off` | Stop `llama-swap`, check `nvidia-smi` for compute processes still using the GPU, then unbind the NVIDIA driver via `dockmind-egpu-unbind.service` and cut Shelly power. If processes are found, enter `AwaitingGPUFree` and poll until clear. A failed unbind aborts shutdown to Error. |
 | POST | `/restart` | Stop then start the complete system |
 | GET | `/health` | DockMind daemon health (does not indicate GPU readiness) |
 | GET | `/docs` | Interactive Swagger UI for exploring the API |
@@ -93,6 +93,7 @@ startup:
   timeout: 60s
 shutdown:
   timeout: 30s
+  gpuFreeCheckInterval: 5m
 power:
   cooldown: 0s
 ```
@@ -156,6 +157,7 @@ shows an auto-shutdown countdown. The countdown is hidden when the state is not
   "llamaSwapRunning": true,
   "llamaSwapHealthy": true,
   "loadedModels": ["qwen3.5-9b"],
+  "gpuProcesses": [],
   "lastError": null,
   "cooldownRemaining": 0,
   "idleRemaining": 0

@@ -16,6 +16,7 @@ const (
 	Starting
 	Ready
 	ShuttingDown
+	AwaitingGPUFree
 	Error
 )
 
@@ -29,6 +30,8 @@ func (s State) String() string {
 		return "Ready"
 	case ShuttingDown:
 		return "ShuttingDown"
+	case AwaitingGPUFree:
+		return "AwaitingGPUFree"
 	case Error:
 		return "Error"
 	default:
@@ -52,8 +55,14 @@ type PowerController interface {
 	IsOn(ctx context.Context) (bool, error)
 }
 
+type GPUProcess struct {
+	PID  int    `json:"pid"`
+	Name string `json:"name"`
+}
+
 type GPUMonitor interface {
 	Status(ctx context.Context) (present bool, name string, err error)
+	Processes(ctx context.Context) ([]GPUProcess, error)
 }
 
 type ContainerController interface {
@@ -71,16 +80,17 @@ type Unbinder interface {
 }
 
 type StatusResponse struct {
-	State             string   `json:"state"`
-	GPUPresent        bool     `json:"gpuPresent"`
-	GPUName           string   `json:"gpuName"`
-	ShellyOn          bool     `json:"shellyOn"`
-	LlamaSwapRunning  bool     `json:"llamaSwapRunning"`
-	LlamaSwapHealthy  bool     `json:"llamaSwapHealthy"`
-	LoadedModels      []string `json:"loadedModels"`
-	LastError         *string  `json:"lastError"`
-	CooldownRemaining float64  `json:"cooldownRemaining"`
-	IdleRemaining     float64  `json:"idleRemaining"`
+	State             string       `json:"state"`
+	GPUPresent        bool         `json:"gpuPresent"`
+	GPUName           string       `json:"gpuName"`
+	ShellyOn          bool         `json:"shellyOn"`
+	LlamaSwapRunning  bool         `json:"llamaSwapRunning"`
+	LlamaSwapHealthy  bool         `json:"llamaSwapHealthy"`
+	LoadedModels      []string     `json:"loadedModels"`
+	GPUProcesses      []GPUProcess `json:"gpuProcesses"`
+	LastError         *string      `json:"lastError"`
+	CooldownRemaining float64      `json:"cooldownRemaining"`
+	IdleRemaining     float64      `json:"idleRemaining"`
 }
 
 type Machine struct {
@@ -91,10 +101,11 @@ type Machine struct {
 	unbinder Unbinder
 	logger   *slog.Logger
 
-	pollInterval    time.Duration
-	startupTimeout  time.Duration
-	shutdownTimeout time.Duration
-	cooldown        time.Duration
+	pollInterval         time.Duration
+	startupTimeout       time.Duration
+	shutdownTimeout      time.Duration
+	gpuFreeCheckInterval time.Duration
+	cooldown             time.Duration
 
 	transitionMu  sync.Mutex
 	stateMu       sync.Mutex
@@ -102,37 +113,48 @@ type Machine struct {
 	lastError     error
 	lastReadyTime time.Time
 	lastOffTime   time.Time
+	resumeStartup bool
+	resumeCh      chan struct{}
 	changeCh      chan struct{}
 	wg            sync.WaitGroup
 }
 
-func New(power PowerController, gpu GPUMonitor, docker ContainerController, health HealthChecker, unbinder Unbinder, logger *slog.Logger, pollInterval, startupTimeout, shutdownTimeout, cooldown time.Duration) *Machine {
+func New(power PowerController, gpu GPUMonitor, docker ContainerController, health HealthChecker, unbinder Unbinder, logger *slog.Logger, pollInterval, startupTimeout, shutdownTimeout, gpuFreeCheckInterval, cooldown time.Duration) *Machine {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Machine{
-		power:           power,
-		gpu:             gpu,
-		docker:          docker,
-		health:          health,
-		unbinder:        unbinder,
-		logger:          logger,
-		pollInterval:    pollInterval,
-		startupTimeout:  startupTimeout,
-		shutdownTimeout: shutdownTimeout,
-		cooldown:        cooldown,
-		state:           Off,
-		changeCh:        make(chan struct{}),
+		power:                power,
+		gpu:                  gpu,
+		docker:               docker,
+		health:               health,
+		unbinder:             unbinder,
+		logger:               logger,
+		pollInterval:         pollInterval,
+		startupTimeout:       startupTimeout,
+		shutdownTimeout:      shutdownTimeout,
+		gpuFreeCheckInterval: gpuFreeCheckInterval,
+		cooldown:             cooldown,
+		state:                Off,
+		changeCh:             make(chan struct{}),
 	}
 }
 
 func (m *Machine) PowerOn() PowerResult {
+	m.stateMu.Lock()
+	current := m.state
+	m.stateMu.Unlock()
+	if current == AwaitingGPUFree {
+		m.requestResume()
+		return ResultAccepted
+	}
+
 	if !m.transitionMu.TryLock() {
 		return ResultConflict
 	}
 
 	m.stateMu.Lock()
-	current := m.state
+	current = m.state
 	inCooldown := m.cooldownActiveLocked(Off)
 	m.stateMu.Unlock()
 
@@ -162,12 +184,19 @@ func (m *Machine) PowerOn() PowerResult {
 }
 
 func (m *Machine) PowerOff() PowerResult {
+	m.stateMu.Lock()
+	current := m.state
+	m.stateMu.Unlock()
+	if current == AwaitingGPUFree {
+		return ResultAlreadyInState
+	}
+
 	if !m.transitionMu.TryLock() {
 		return ResultConflict
 	}
 
 	m.stateMu.Lock()
-	current := m.state
+	current = m.state
 	inCooldown := m.cooldownActiveLocked(Ready)
 	m.stateMu.Unlock()
 
@@ -199,12 +228,20 @@ func (m *Machine) PowerOff() PowerResult {
 }
 
 func (m *Machine) Restart() PowerResult {
+	m.stateMu.Lock()
+	current := m.state
+	m.stateMu.Unlock()
+	if current == AwaitingGPUFree {
+		m.requestResume()
+		return ResultAccepted
+	}
+
 	if !m.transitionMu.TryLock() {
 		return ResultConflict
 	}
 
 	m.stateMu.Lock()
-	current := m.state
+	current = m.state
 	inCooldown := m.cooldownActiveLocked(current)
 	m.stateMu.Unlock()
 
@@ -239,6 +276,13 @@ func (m *Machine) Status() StatusResponse {
 	m.stateMu.Unlock()
 
 	gpuPresent, gpuName := m.probeGPU(probeFailureExpected(state))
+	var gpuProcesses []GPUProcess
+	if gpuPresent {
+		gpuProcesses = m.probeGPUProcesses()
+	}
+	if gpuProcesses == nil {
+		gpuProcesses = []GPUProcess{}
+	}
 	shellyOn := m.probeBool("Shelly", false, func(ctx context.Context) (bool, error) {
 		return m.power.IsOn(ctx)
 	})
@@ -264,6 +308,7 @@ func (m *Machine) Status() StatusResponse {
 		LlamaSwapRunning:  running,
 		LlamaSwapHealthy:  healthy,
 		LoadedModels:      models,
+		GPUProcesses:      gpuProcesses,
 		LastError:         lastError,
 		CooldownRemaining: cooldownRemaining,
 	}
@@ -312,8 +357,19 @@ func (m *Machine) probeHealth(quietOnFailure bool) (bool, []string) {
 	return healthy, models
 }
 
+func (m *Machine) probeGPUProcesses() []GPUProcess {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	procs, err := m.gpu.Processes(ctx)
+	if err != nil {
+		m.logger.Debug("GPU processes probe failed", "error", err)
+		return nil
+	}
+	return procs
+}
+
 func probeFailureExpected(s State) bool {
-	return s == Off || s == Starting || s == ShuttingDown
+	return s == Off || s == Starting || s == ShuttingDown || s == AwaitingGPUFree
 }
 
 func (m *Machine) Wait() {
@@ -332,6 +388,38 @@ func (m *Machine) setState(s State, err error) {
 	close(m.changeCh)
 	m.changeCh = make(chan struct{})
 	m.stateMu.Unlock()
+}
+
+// setStateOrResume atomically checks for a pending resume request and either
+// returns true (caller should run startup) or transitions to s and returns
+// false. This closes the race where PowerOn/Restart arrives after a "GPU free"
+// decision but before the state transition.
+func (m *Machine) setStateOrResume(s State) bool {
+	m.stateMu.Lock()
+	resume := m.resumeStartup
+	m.resumeStartup = false
+	ch := m.resumeCh
+	if resume {
+		if ch != nil {
+			select {
+			case <-ch:
+			default:
+			}
+		}
+		m.stateMu.Unlock()
+		return true
+	}
+	m.state = s
+	m.lastError = nil
+	if s == Ready {
+		m.lastReadyTime = time.Now()
+	} else if s == Off {
+		m.lastOffTime = time.Now()
+	}
+	close(m.changeCh)
+	m.changeCh = make(chan struct{})
+	m.stateMu.Unlock()
+	return false
 }
 
 // cooldownActiveLocked reports whether the cooldown for the given stable state
@@ -409,7 +497,7 @@ func (m *Machine) EnsureReady(ctx context.Context) error {
 			return nil
 		case Error:
 			return fmt.Errorf("%w: %w", ErrBackendError, lastErr)
-		case Off:
+		case Off, AwaitingGPUFree:
 			// Trigger startup if not already in progress, then wait for the
 			// state-change signal we captured before calling PowerOn.
 			// If PowerOn reports a conflict (another transition still holds
@@ -420,7 +508,7 @@ func (m *Machine) EnsureReady(ctx context.Context) error {
 			case ResultAccepted:
 				select {
 				case <-ch:
-					// State changed; loop to re-evaluate.
+				// State changed; loop to re-evaluate.
 				case <-ctx.Done():
 					return ctx.Err()
 				}
@@ -447,7 +535,7 @@ func (m *Machine) EnsureReady(ctx context.Context) error {
 				return ctx.Err()
 			}
 		case ShuttingDown:
-			// Wait for shutdown to complete (→ Off), then loop back to PowerOn.
+			// Wait for shutdown to complete (→ Off or resume to Ready), then loop back to PowerOn.
 			select {
 			case <-ch:
 			case <-ctx.Done():
@@ -510,18 +598,19 @@ func (m *Machine) shutdown() {
 	m.setState(ShuttingDown, nil)
 	m.logger.Info("State -> ShuttingDown")
 
-	ctx, cancel := context.WithTimeout(context.Background(), m.shutdownTimeout)
-	defer cancel()
+	// Phase 1: stop llama-swap within shutdownTimeout.
+	ctx1, cancel1 := context.WithTimeout(context.Background(), m.shutdownTimeout)
+	defer cancel1()
 
 	m.logger.Info("Stopping llama-swap")
-	if err := m.docker.Stop(ctx); err != nil {
+	if err := m.docker.Stop(ctx1); err != nil {
 		m.setState(Error, fmt.Errorf("docker stop failed: %w", err))
 		m.logger.Error("Docker stop failed", "error", err)
 		return
 	}
 
 	m.logger.Info("Waiting for llama-swap to stop")
-	if err := m.poll(ctx, m.pollInterval, func(ctx context.Context) (bool, error) {
+	if err := m.poll(ctx1, m.pollInterval, func(ctx context.Context) (bool, error) {
 		running, err := m.docker.IsRunning(ctx)
 		return !running, err
 	}); err != nil {
@@ -530,22 +619,54 @@ func (m *Machine) shutdown() {
 		return
 	}
 
+	// Phase 2: wait indefinitely for GPU to be free of compute processes.
+	m.stateMu.Lock()
+	m.resumeStartup = false
+	m.resumeCh = make(chan struct{}, 1)
+	m.stateMu.Unlock()
+	m.setState(AwaitingGPUFree, nil)
+	m.logger.Info("State -> AwaitingGPUFree")
+
+	free, err := m.awaitGpuFree()
+	if err != nil {
+		m.setState(Error, fmt.Errorf("gpu process check failed: %w", err))
+		m.logger.Error("GPU process check failed", "error", err)
+		return
+	}
+	if !free {
+		// Resume signal received; run startup while still holding transitionMu.
+		m.startup()
+		return
+	}
+
+	// Phase 3: unbind and power off within a fresh shutdownTimeout.
+	// Atomically check for a resume request that arrived after the GPU became
+	// free but before the state transition; if present, run startup instead.
+	if m.setStateOrResume(ShuttingDown) {
+		m.startup()
+		return
+	}
+	m.logger.Info("State -> ShuttingDown")
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), m.shutdownTimeout)
+	defer cancel2()
+
 	m.logger.Info("Unbinding eGPU drivers")
-	if err := m.unbinder.Unbind(ctx); err != nil {
+	if err := m.unbinder.Unbind(ctx2); err != nil {
 		m.setState(Error, fmt.Errorf("egpu unbind failed: %w", err))
 		m.logger.Error("eGPU unbind failed", "error", err)
 		return
 	}
 
 	m.logger.Info("Shelly power OFF")
-	if err := m.power.SetPower(ctx, false); err != nil {
+	if err := m.power.SetPower(ctx2, false); err != nil {
 		m.setState(Error, fmt.Errorf("shelly power off failed: %w", err))
 		m.logger.Error("Shelly power OFF failed", "error", err)
 		return
 	}
 
 	m.logger.Info("Waiting for GPU to disappear")
-	if err := m.poll(ctx, m.pollInterval, func(ctx context.Context) (bool, error) {
+	if err := m.poll(ctx2, m.pollInterval, func(ctx context.Context) (bool, error) {
 		present, _, err := m.gpu.Status(ctx)
 		if err != nil {
 			m.logger.Debug("nvidia-smi failed during shutdown, treating GPU as gone", "error", err)
@@ -562,6 +683,80 @@ func (m *Machine) shutdown() {
 	m.logger.Info("State -> Off")
 }
 
+func (m *Machine) requestResume() {
+	m.stateMu.Lock()
+	m.resumeStartup = true
+	ch := m.resumeCh
+	m.stateMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// consumeResume checks whether a resume request is pending and drains the
+// resume channel if so. It returns true when a startup should be resumed.
+// It resets resumeStartup under stateMu and is safe to call from any goroutine.
+func (m *Machine) consumeResume() bool {
+	m.stateMu.Lock()
+	resume := m.resumeStartup
+	m.resumeStartup = false
+	ch := m.resumeCh
+	m.stateMu.Unlock()
+	if resume && ch != nil {
+		select {
+		case <-ch:
+		default:
+		}
+	}
+	return resume
+}
+
+func (m *Machine) awaitGpuFree() (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	procs, err := m.gpu.Processes(ctx)
+	if err != nil {
+		return false, err
+	}
+	if len(procs) == 0 {
+		if m.consumeResume() {
+			return false, nil
+		}
+		return true, nil
+	}
+
+	m.logger.Info("GPU processes detected, waiting for them to clear", "count", len(procs))
+
+	ticker := time.NewTicker(m.gpuFreeCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			procs, err := m.gpu.Processes(ctx)
+			cancel()
+			if err != nil {
+				return false, err
+			}
+			if len(procs) == 0 {
+				if m.consumeResume() {
+					return false, nil
+				}
+				return true, nil
+			}
+		case <-m.resumeCh:
+			if m.consumeResume() {
+				return false, nil
+			}
+			// Spurious wake: continue waiting.
+		}
+	}
+}
+
 func (m *Machine) restart() {
 	m.stateMu.Lock()
 	current := m.state
@@ -575,6 +770,10 @@ func (m *Machine) restart() {
 	current = m.state
 	m.stateMu.Unlock()
 	if current == Error {
+		return
+	}
+	if current == Ready {
+		// shutdown() already ran startup() (resume from AwaitingGPUFree).
 		return
 	}
 

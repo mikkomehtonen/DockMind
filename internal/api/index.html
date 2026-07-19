@@ -325,6 +325,39 @@
       word-break: break-word;
     }
 
+    .gpu-procs {
+      background: var(--surface);
+      border: 1px solid var(--primary);
+      border-radius: var(--radius);
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .gpu-procs[hidden] {
+      display: none;
+    }
+
+    .gpu-procs__label {
+      margin: 0;
+      font-size: var(--fs-sm);
+      color: var(--primary);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .gpu-procs__list {
+      margin: 0;
+      padding-left: 1.25rem;
+      font-size: var(--fs-base);
+      color: var(--ink);
+    }
+
+    .gpu-procs__list li {
+      margin-bottom: 0.25rem;
+    }
+
     .app__footer {
       text-align: center;
       font-size: var(--fs-sm);
@@ -418,6 +451,11 @@
       </div>
     </section>
 
+    <section class="gpu-procs" id="gpu-procs-banner" hidden>
+      <p class="gpu-procs__label">GPU processes (preventing power off)</p>
+      <ul class="gpu-procs__list" id="gpu-procs-list"></ul>
+    </section>
+
     <section class="error" id="error-banner" hidden>
       <p class="error__label">Last error</p>
       <p class="error__message" id="error-message"></p>
@@ -437,6 +475,7 @@
       Starting: "busy",
       Ready: "primary",
       ShuttingDown: "busy",
+      AwaitingGPUFree: "busy",
       Error: "danger",
     };
 
@@ -445,6 +484,7 @@
       Starting:    { on: false, off: false, restart: false },
       Ready:       { on: false, off: true,  restart: true  },
       ShuttingDown:{ on: false, off: false, restart: false },
+      AwaitingGPUFree:{ on: true, off: false, restart: true },
       Error:       { on: false, off: true,  restart: false },
     };
 
@@ -468,6 +508,8 @@
       healthValue: document.getElementById("health-value"),
       errorBanner: document.getElementById("error-banner"),
       errorMessage: document.getElementById("error-message"),
+      gpuProcsBanner: document.getElementById("gpu-procs-banner"),
+      gpuProcsList: document.getElementById("gpu-procs-list"),
       cooldown: document.getElementById("cooldown"),
       cooldownTime: document.getElementById("cooldown-time"),
       idle: document.getElementById("idle"),
@@ -526,6 +568,15 @@
       return Math.ceil(s / 60) + "m";
     }
 
+    function escapeHtml(str) {
+      return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
     function render(data) {
       const color = STATE_COLORS[data.state] || "neutral";
       setStateColor(color);
@@ -567,6 +618,16 @@
       } else {
         els.errorBanner.hidden = true;
         els.errorMessage.textContent = "";
+      }
+
+      if (data.gpuProcesses && data.gpuProcesses.length > 0) {
+        els.gpuProcsBanner.hidden = false;
+        els.gpuProcsList.innerHTML = data.gpuProcesses
+          .map(p => `<li>${escapeHtml(p.name)} (PID ${p.pid})</li>`)
+          .join("");
+      } else {
+        els.gpuProcsBanner.hidden = true;
+        els.gpuProcsList.innerHTML = "";
       }
 
       if (data.cooldownRemaining > 0) {

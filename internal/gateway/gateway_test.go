@@ -85,7 +85,7 @@ func (f *fakeController) EnsureReady(ctx context.Context) error {
 		switch current {
 		case state.Ready:
 			return nil
-		case state.Off, state.Starting, state.ShuttingDown:
+		case state.Off, state.Starting, state.ShuttingDown, state.AwaitingGPUFree:
 			if f.autoStart {
 				f.setState(state.Ready, nil)
 				return nil
@@ -2123,5 +2123,44 @@ func TestIdleRemaining_ZeroWhenPendingShutdown(t *testing.T) {
 
 	if got := gw.IdleRemaining(); got != 0 {
 		t.Errorf("expected 0 when pendingShutdown is true, got %v", got)
+	}
+}
+
+func TestEnsureReady_AwaitingGPUFreeAutoStart(t *testing.T) {
+	ctrl := newFakeController()
+	ctrl.setState(state.AwaitingGPUFree, nil)
+	ctrl.autoStart = true
+
+	if err := ctrl.EnsureReady(context.Background()); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+
+	ctrl.mu.Lock()
+	calls := ctrl.ensureReadyCalls
+	ctrl.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("expected EnsureReady called once, got %d", calls)
+	}
+	if ctrl.State() != state.Ready {
+		t.Errorf("expected state Ready, got %s", ctrl.State())
+	}
+}
+
+func TestEnsureReady_AwaitingGPUFreeWaitsForSignal(t *testing.T) {
+	ctrl := newFakeController()
+	ctrl.setState(state.AwaitingGPUFree, nil)
+	ctrl.autoStart = false
+
+	done := make(chan error, 1)
+	go func() {
+		done <- ctrl.EnsureReady(context.Background())
+	}()
+
+	// Give EnsureReady time to enter the select.
+	time.Sleep(20 * time.Millisecond)
+	ctrl.setState(state.Ready, nil)
+
+	if err := <-done; err != nil {
+		t.Fatalf("expected nil, got %v", err)
 	}
 }

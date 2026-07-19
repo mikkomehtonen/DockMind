@@ -305,7 +305,7 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected components.schemas.StatusResponse.properties to be an object")
 		}
-		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "lastError", "cooldownRemaining", "idleRemaining"} {
+		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "gpuProcesses", "lastError", "cooldownRemaining", "idleRemaining"} {
 			if _, ok := properties[field]; !ok {
 				t.Fatalf("expected StatusResponse properties to contain %q", field)
 			}
