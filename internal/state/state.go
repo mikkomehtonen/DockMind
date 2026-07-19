@@ -79,18 +79,41 @@ type Unbinder interface {
 	Unbind(ctx context.Context) error
 }
 
+type AuxResult int
+
+const (
+	AuxResultOK AuxResult = iota
+	AuxResultNotFound
+	AuxResultConflict
+	AuxResultError
+)
+
+type AuxContainerStatus struct {
+	Name    string `json:"name"`
+	Running bool   `json:"running"`
+}
+
+type AuxContainerController interface {
+	Names() []string
+	Start(ctx context.Context, name string) error
+	Stop(ctx context.Context, name string) error
+	IsRunning(ctx context.Context, name string) (bool, error)
+	StopAll(ctx context.Context) error
+}
+
 type StatusResponse struct {
-	State             string       `json:"state"`
-	GPUPresent        bool         `json:"gpuPresent"`
-	GPUName           string       `json:"gpuName"`
-	ShellyOn          bool         `json:"shellyOn"`
-	LlamaSwapRunning  bool         `json:"llamaSwapRunning"`
-	LlamaSwapHealthy  bool         `json:"llamaSwapHealthy"`
-	LoadedModels      []string     `json:"loadedModels"`
-	GPUProcesses      []GPUProcess `json:"gpuProcesses"`
-	LastError         *string      `json:"lastError"`
-	CooldownRemaining float64      `json:"cooldownRemaining"`
-	IdleRemaining     float64      `json:"idleRemaining"`
+	State             string               `json:"state"`
+	GPUPresent        bool                 `json:"gpuPresent"`
+	GPUName           string               `json:"gpuName"`
+	ShellyOn          bool                 `json:"shellyOn"`
+	LlamaSwapRunning  bool                 `json:"llamaSwapRunning"`
+	LlamaSwapHealthy  bool                 `json:"llamaSwapHealthy"`
+	LoadedModels      []string             `json:"loadedModels"`
+	GPUProcesses      []GPUProcess         `json:"gpuProcesses"`
+	LastError         *string              `json:"lastError"`
+	CooldownRemaining float64              `json:"cooldownRemaining"`
+	IdleRemaining     float64              `json:"idleRemaining"`
+	AuxContainers     []AuxContainerStatus `json:"auxContainers"`
 }
 
 type Machine struct {
@@ -99,6 +122,7 @@ type Machine struct {
 	docker   ContainerController
 	health   HealthChecker
 	unbinder Unbinder
+	aux      AuxContainerController
 	logger   *slog.Logger
 
 	pollInterval         time.Duration
@@ -138,6 +162,10 @@ func New(power PowerController, gpu GPUMonitor, docker ContainerController, heal
 		state:                Off,
 		changeCh:             make(chan struct{}),
 	}
+}
+
+func (m *Machine) SetAuxContainers(ctrl AuxContainerController) {
+	m.aux = ctrl
 }
 
 func (m *Machine) PowerOn() PowerResult {
@@ -300,6 +328,8 @@ func (m *Machine) Status() StatusResponse {
 		lastError = &s
 	}
 
+	auxStatuses := m.probeAuxContainers()
+
 	return StatusResponse{
 		State:             state.String(),
 		GPUPresent:        gpuPresent,
@@ -311,7 +341,81 @@ func (m *Machine) Status() StatusResponse {
 		GPUProcesses:      gpuProcesses,
 		LastError:         lastError,
 		CooldownRemaining: cooldownRemaining,
+		AuxContainers:     auxStatuses,
 	}
+}
+
+func (m *Machine) probeAuxContainers() []AuxContainerStatus {
+	if m.aux == nil {
+		return []AuxContainerStatus{}
+	}
+
+	var statuses []AuxContainerStatus
+	for _, name := range m.aux.Names() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		running, err := m.aux.IsRunning(ctx, name)
+		cancel()
+		if err != nil {
+			m.logger.Warn("Aux container status probe failed", "name", name, "error", err)
+			running = false
+		}
+		statuses = append(statuses, AuxContainerStatus{Name: name, Running: running})
+	}
+	return statuses
+}
+
+func (m *Machine) StartAuxContainer(name string) AuxResult {
+	return m.doAuxOperation(name, true)
+}
+
+func (m *Machine) StopAuxContainer(name string) AuxResult {
+	return m.doAuxOperation(name, false)
+}
+
+func (m *Machine) doAuxOperation(name string, start bool) AuxResult {
+	if m.aux == nil {
+		return AuxResultNotFound
+	}
+
+	found := false
+	for _, n := range m.aux.Names() {
+		if n == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return AuxResultNotFound
+	}
+
+	if !m.transitionMu.TryLock() {
+		return AuxResultConflict
+	}
+	defer m.transitionMu.Unlock()
+
+	m.stateMu.Lock()
+	current := m.state
+	m.stateMu.Unlock()
+
+	if current != Off && current != Ready {
+		return AuxResultConflict
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var err error
+	if start {
+		err = m.aux.Start(ctx, name)
+	} else {
+		err = m.aux.Stop(ctx, name)
+	}
+	if err != nil {
+		m.logger.Error("Aux container operation failed", "name", name, "start", start, "error", err)
+		return AuxResultError
+	}
+
+	return AuxResultOK
 }
 
 func (m *Machine) probeGPU(quietOnFailure bool) (bool, string) {
@@ -617,6 +721,19 @@ func (m *Machine) shutdown() {
 		m.setState(Error, fmt.Errorf("llama-swap stop timeout: %w", err))
 		m.logger.Error("llama-swap stop timeout", "error", err)
 		return
+	}
+
+	// Phase 1b: stop all aux containers with a fresh shutdown timeout.
+	if m.aux != nil {
+		ctx1b, cancel1b := context.WithTimeout(context.Background(), m.shutdownTimeout)
+		defer cancel1b()
+
+		m.logger.Info("Stopping aux containers")
+		if err := m.aux.StopAll(ctx1b); err != nil {
+			m.setState(Error, fmt.Errorf("aux container stop failed: %w", err))
+			m.logger.Error("Aux container stop failed", "error", err)
+			return
+		}
 	}
 
 	// Phase 2: wait indefinitely for GPU to be free of compute processes.

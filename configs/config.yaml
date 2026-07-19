@@ -17,6 +17,11 @@ shutdown:
   gpuFreeCheckInterval: 5m
 power:
   cooldown: 0s
+# auxContainers:
+#   - name: kokoro
+#     container: kokoro-tts
+#   - name: whisper
+#     container: whisper-stt
 gateway:
   enabled: false
   modelsRefreshInterval: 60s

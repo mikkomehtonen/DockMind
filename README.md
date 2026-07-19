@@ -50,6 +50,8 @@ make lint
 | POST | `/power/on` | Power on the eGPU and start `llama-swap` |
 | POST | `/power/off` | Stop `llama-swap`, check `nvidia-smi` for compute processes still using the GPU, then unbind the NVIDIA driver via `dockmind-egpu-unbind.service` and cut Shelly power. If processes are found, enter `AwaitingGPUFree` and poll until clear. A failed unbind aborts shutdown to Error. |
 | POST | `/restart` | Stop then start the complete system |
+| POST | `/containers/{name}/start` | Start an optional aux container by display name |
+| POST | `/containers/{name}/stop` | Stop an optional aux container by display name |
 | GET | `/health` | DockMind daemon health (does not indicate GPU readiness) |
 | GET | `/docs` | Interactive Swagger UI for exploring the API |
 | GET | `/` | Responsive web UI for monitoring and controlling DockMind |
@@ -104,6 +106,26 @@ reaches Off, and `POST /power/off` is blocked for that long after the system
 reaches Ready. Blocked requests return `429 Too Many Requests`; `GET /status`
 reports the remaining seconds in `cooldownRemaining`. The default is `0s`
 (disabled).
+
+### Optional Aux Containers
+
+DockMind can track optional Docker containers (for example a text-to-speech or
+speech-to-text service) that are started and stopped on demand. They are not
+started automatically during power-on, but any running aux containers are stopped
+during the shutdown sequence before the GPU-process check and Shelly power-off.
+
+```yaml
+auxContainers:
+  - name: kokoro
+    container: kokoro-tts
+  - name: whisper
+    container: whisper-stt
+```
+
+Each entry needs a display `name` (used in `/status`, the web UI, and the API
+path) and a `container` (the actual Docker container name passed to `docker
+start`/`stop`). Names must be unique. When no aux containers are configured,
+`GET /status` returns `"auxContainers": []`.
 
 ### Gateway Configuration
 
@@ -160,7 +182,8 @@ shows an auto-shutdown countdown. The countdown is hidden when the state is not
   "gpuProcesses": [],
   "lastError": null,
   "cooldownRemaining": 0,
-  "idleRemaining": 0
+  "idleRemaining": 0,
+  "auxContainers": []
 }
 ```
 

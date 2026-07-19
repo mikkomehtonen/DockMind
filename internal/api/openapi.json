@@ -95,6 +95,64 @@
         }
       }
     },
+    "/containers/{name}/start": {
+      "post": {
+        "summary": "Start an optional aux container by name",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Container started or already running"
+          },
+          "404": {
+            "description": "Unknown container"
+          },
+          "409": {
+            "description": "Conflict — power transition in progress or state does not allow aux operations"
+          },
+          "500": {
+            "description": "Docker start failed"
+          }
+        }
+      }
+    },
+    "/containers/{name}/stop": {
+      "post": {
+        "summary": "Stop an optional aux container by name",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Container stopped or already stopped"
+          },
+          "404": {
+            "description": "Unknown container"
+          },
+          "409": {
+            "description": "Conflict — power transition in progress or state does not allow aux operations"
+          },
+          "500": {
+            "description": "Docker stop failed"
+          }
+        }
+      }
+    },
     "/v1/chat/completions": {
       "post": {
         "summary": "Reverse proxy to llama-swap chat completions (OpenAI-compatible)",
@@ -194,6 +252,17 @@
           "idleRemaining": {
             "type": "number",
             "description": "Remaining seconds before an idle auto-shutdown. 0 when the gateway is disabled, idleTimeout is 0, the state is not Ready, or a request is in flight."
+          },
+          "auxContainers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "running": { "type": "boolean" }
+              }
+            },
+            "description": "Status of optional aux containers. Empty array when none are configured."
           }
         }
       },

@@ -24,11 +24,11 @@
 **What happened**: Story 016 required `go test -race ./internal/gateway/` to pass. The gateway refresher tests had used a plain `int` counter (`callCount`) that the `httptest` handler goroutine incremented while the test goroutine read it, causing multiple data-race failures unrelated to the new idle-countdown code.
 **Takeaway**: When a story mandates `-race`, audit existing tests in the same package for unsynchronized shared variables (counters, flags, timestamps) across handler and test goroutines. Use `sync/atomic` or a mutex, and remember that `atomic.Int32` must be read with `.Load()` — copying the value itself triggers a `go vet` warning.
 
-## Reviewer reports are committed to the branch; .opencode/ stays untracked workspace config
-**Date**: 2026-07-08
-**Area**: workflow / git
-**What happened**: Running the acceptance/code reviewers created committed review-report commits on the branch and left the `.opencode/` workspace configuration directory untracked. This makes `git status` show untracked files even though all story-related changes are committed.
-**Takeaway**: Expect reviewer artifacts as branch commits. Do not commit `.opencode/` as part of a feature story; treat it as pre-existing workspace configuration.
+## Adding slice/map fields to Config breaks struct-equality tests
+**Date**: 2026-07-19
+**Area**: testing / config
+**What happened**: Story 018 added `AuxContainers []AuxContainerConfig` to the `Config` struct. The existing `config_test.go` compared loaded configs with `*cfg != tc.want`, which is invalid for structs containing non-comparable fields (slices/maps). The test file had to be updated to use `reflect.DeepEqual`.
+**Takeaway**: When extending `Config` with slice or map fields, update `config_test.go` to compare with `reflect.DeepEqual` instead of `!=`. Check other places that compare `Config` by value for the same breakage.
 
 ## Extend existing table-driven tests instead of adding parallel hand-written cases
 **Date**: 2026-07-08

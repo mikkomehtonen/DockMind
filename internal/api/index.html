@@ -358,6 +358,58 @@
       margin-bottom: 0.25rem;
     }
 
+    .aux {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .aux[hidden] {
+      display: none;
+    }
+
+    .aux__heading {
+      margin: 0 0 0.25rem;
+      font-size: var(--fs-lg);
+      font-weight: 600;
+    }
+
+    .aux__row {
+      display: flex;
+      align-items: center;
+      gap: 0.625rem;
+      padding: 0.625rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .aux__row:last-child {
+      border-bottom: none;
+    }
+
+    .aux__label {
+      flex: 1;
+      color: var(--ink);
+    }
+
+    .aux__value {
+      color: var(--muted);
+      font-size: var(--fs-sm);
+    }
+
+    .aux__actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .aux__actions .btn {
+      padding: 0.5rem 0.75rem;
+      font-size: var(--fs-sm);
+    }
+
     .app__footer {
       text-align: center;
       font-size: var(--fs-sm);
@@ -451,6 +503,11 @@
       </div>
     </section>
 
+    <section class="aux" id="aux-card" hidden>
+      <h2 class="aux__heading">Aux Containers</h2>
+      <div id="aux-list"></div>
+    </section>
+
     <section class="gpu-procs" id="gpu-procs-banner" hidden>
       <p class="gpu-procs__label">GPU processes (preventing power off)</p>
       <ul class="gpu-procs__list" id="gpu-procs-list"></ul>
@@ -510,6 +567,8 @@
       errorMessage: document.getElementById("error-message"),
       gpuProcsBanner: document.getElementById("gpu-procs-banner"),
       gpuProcsList: document.getElementById("gpu-procs-list"),
+      auxCard: document.getElementById("aux-card"),
+      auxList: document.getElementById("aux-list"),
       cooldown: document.getElementById("cooldown"),
       cooldownTime: document.getElementById("cooldown-time"),
       idle: document.getElementById("idle"),
@@ -630,6 +689,38 @@
         els.gpuProcsList.innerHTML = "";
       }
 
+      const auxEnabled = (data.state === "Off" || data.state === "Ready") && data.cooldownRemaining <= 0;
+      if (data.auxContainers && data.auxContainers.length > 0) {
+        els.auxCard.hidden = false;
+        els.auxList.innerHTML = data.auxContainers
+          .map(c => {
+            const running = c.running;
+            const dotClass = running ? "component__dot is-on" : "component__dot";
+            const statusText = running ? "Running" : "Stopped";
+            return `
+              <div class="aux__row">
+                <span class="${dotClass}"></span>
+                <span class="aux__label">${escapeHtml(c.name)}</span>
+                <span class="aux__value">${statusText}</span>
+                <div class="aux__actions">
+                  <button class="btn btn--primary aux-btn-start" data-name="${escapeHtml(c.name)}" ${running || !auxEnabled ? "disabled" : ""}>Start</button>
+                  <button class="btn btn--danger aux-btn-stop" data-name="${escapeHtml(c.name)}" ${!running || !auxEnabled ? "disabled" : ""}>Stop</button>
+                </div>
+              </div>
+            `;
+          })
+          .join("");
+        els.auxList.querySelectorAll(".aux-btn-start").forEach(btn => {
+          btn.addEventListener("click", () => doAuxAction(btn.dataset.name, "start"));
+        });
+        els.auxList.querySelectorAll(".aux-btn-stop").forEach(btn => {
+          btn.addEventListener("click", () => doAuxAction(btn.dataset.name, "stop"));
+        });
+      } else {
+        els.auxCard.hidden = true;
+        els.auxList.innerHTML = "";
+      }
+
       if (data.cooldownRemaining > 0) {
         els.cooldown.hidden = false;
         els.cooldownTime.textContent = Math.ceil(data.cooldownRemaining);
@@ -708,6 +799,22 @@
       } catch (e) {
         showFeedback("Request failed");
       }
+    }
+
+    async function doAuxAction(name, action) {
+      const endpoint = `/containers/${encodeURIComponent(name)}/${action}`;
+      const label = action === "start" ? "Starting " + name : "Stopping " + name;
+      showFeedback(label + "…");
+      try {
+        const res = await fetch(endpoint, { method: "POST" });
+        if (res.status === 200)      showFeedback(label + " done");
+        else if (res.status === 404) showFeedback("Container not found");
+        else if (res.status === 409) showFeedback("Not allowed right now");
+        else                         showFeedback("Unexpected response");
+      } catch (e) {
+        showFeedback("Request failed");
+      }
+      setTimeout(fetchStatus, 1000);
     }
 
     [els.btnOn, els.btnOff, els.btnRestart].forEach(btn => {

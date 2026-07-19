@@ -29,6 +29,8 @@ type StateMachine interface {
 	PowerOn() state.PowerResult
 	PowerOff() state.PowerResult
 	Restart() state.PowerResult
+	StartAuxContainer(name string) state.AuxResult
+	StopAuxContainer(name string) state.AuxResult
 }
 
 // IdleReporter reports the remaining time before an idle auto-shutdown.
@@ -85,6 +87,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /power/on", s.handlePowerOn)
 	mux.HandleFunc("POST /power/off", s.handlePowerOff)
 	mux.HandleFunc("POST /restart", s.handleRestart)
+	mux.HandleFunc("POST /containers/{name}/start", s.handleStartAuxContainer)
+	mux.HandleFunc("POST /containers/{name}/stop", s.handleStopAuxContainer)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /docs", s.handleDocs)
 	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
@@ -133,6 +137,31 @@ func (s *Server) handlePowerResult(w http.ResponseWriter, result state.PowerResu
 		w.WriteHeader(http.StatusConflict)
 	case state.ResultCooldown:
 		w.WriteHeader(http.StatusTooManyRequests)
+	default:
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) handleStartAuxContainer(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.handleAuxResult(w, s.machine.StartAuxContainer(name))
+}
+
+func (s *Server) handleStopAuxContainer(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.handleAuxResult(w, s.machine.StopAuxContainer(name))
+}
+
+func (s *Server) handleAuxResult(w http.ResponseWriter, result state.AuxResult) {
+	switch result {
+	case state.AuxResultOK:
+		w.WriteHeader(http.StatusOK)
+	case state.AuxResultNotFound:
+		w.WriteHeader(http.StatusNotFound)
+	case state.AuxResultConflict:
+		w.WriteHeader(http.StatusConflict)
+	case state.AuxResultError:
+		w.WriteHeader(http.StatusInternalServerError)
 	default:
 		w.WriteHeader(http.StatusInternalServerError)
 	}

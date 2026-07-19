@@ -129,6 +129,8 @@ type fakeDocker struct {
 	stopErr      error
 	isRunningErr error
 	block        chan struct{} // blocks both Start and Stop until closed
+	stopCalls    int
+	stopCallback func()
 }
 
 func (f *fakeDocker) Start(ctx context.Context) error {
@@ -158,6 +160,10 @@ func (f *fakeDocker) Stop(ctx context.Context) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.stopCalls++
+	if f.stopCallback != nil {
+		f.stopCallback()
+	}
 	if f.stopErr != nil {
 		return f.stopErr
 	}
@@ -201,6 +207,76 @@ func (f *fakeUnbinder) Unbind(ctx context.Context) error {
 	defer f.mu.Unlock()
 	f.calls++
 	return f.unbindErr
+}
+
+type fakeAuxController struct {
+	mu           sync.Mutex
+	names        []string
+	startCalls   []string
+	stopCalls    []string
+	stopAllCalls int
+	isRunning    map[string]bool
+	startErr     error
+	stopErr      error
+	stopAllErr   error
+	isRunningErr error
+}
+
+func (f *fakeAuxController) Names() []string {
+	return f.names
+}
+
+func (f *fakeAuxController) Start(ctx context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startCalls = append(f.startCalls, name)
+	if f.startErr != nil {
+		return f.startErr
+	}
+	if f.isRunning == nil {
+		f.isRunning = make(map[string]bool)
+	}
+	f.isRunning[name] = true
+	return nil
+}
+
+func (f *fakeAuxController) Stop(ctx context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopCalls = append(f.stopCalls, name)
+	if f.stopErr != nil {
+		return f.stopErr
+	}
+	if f.isRunning == nil {
+		f.isRunning = make(map[string]bool)
+	}
+	f.isRunning[name] = false
+	return nil
+}
+
+func (f *fakeAuxController) IsRunning(ctx context.Context, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.isRunningErr != nil {
+		return false, f.isRunningErr
+	}
+	return f.isRunning[name], nil
+}
+
+func (f *fakeAuxController) StopAll(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopAllCalls++
+	if f.stopAllErr != nil {
+		return f.stopAllErr
+	}
+	for _, name := range f.names {
+		f.stopCalls = append(f.stopCalls, name)
+		if f.isRunning != nil {
+			f.isRunning[name] = false
+		}
+	}
+	return nil
 }
 
 func newTestMachine() (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth, *fakeUnbinder) {
@@ -2151,5 +2227,365 @@ func TestEnsureReadyFromAwaitingGPUFree(t *testing.T) {
 	}
 	if m.State() != Ready {
 		t.Fatalf("expected Ready, got %v", m.State())
+	}
+}
+
+func TestStartAuxContainer(t *testing.T) {
+	cases := []struct {
+		name      string
+		state     State
+		auxName   string
+		want      AuxResult
+		wantStart bool
+	}{
+		{"Ready start kokoro", Ready, "kokoro", AuxResultOK, true},
+		{"Off start whisper", Off, "whisper", AuxResultOK, true},
+		{"Starting conflict", Starting, "kokoro", AuxResultConflict, false},
+		{"ShuttingDown conflict", ShuttingDown, "kokoro", AuxResultConflict, false},
+		{"Error conflict", Error, "kokoro", AuxResultConflict, false},
+		{"AwaitingGPUFree conflict", AwaitingGPUFree, "kokoro", AuxResultConflict, false},
+		{"unknown not found", Ready, "unknown", AuxResultNotFound, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, _, _, _, _ := newTestMachine()
+			aux := &fakeAuxController{
+				names:     []string{"kokoro", "whisper"},
+				isRunning: map[string]bool{"kokoro": false, "whisper": true},
+			}
+			m.SetAuxContainers(aux)
+			m.state = tc.state
+
+			got := m.StartAuxContainer(tc.auxName)
+			if got != tc.want {
+				t.Fatalf("expected %v, got %v", tc.want, got)
+			}
+			if tc.wantStart {
+				if len(aux.startCalls) != 1 || aux.startCalls[0] != tc.auxName {
+					t.Fatalf("expected Start called with %q, got %v", tc.auxName, aux.startCalls)
+				}
+			} else {
+				if len(aux.startCalls) != 0 {
+					t.Fatalf("expected Start not called, got %v", aux.startCalls)
+				}
+			}
+		})
+	}
+}
+
+func TestStopAuxContainer(t *testing.T) {
+	cases := []struct {
+		name     string
+		state    State
+		auxName  string
+		want     AuxResult
+		wantStop bool
+	}{
+		{"Ready stop whisper", Ready, "whisper", AuxResultOK, true},
+		{"Off stop kokoro", Off, "kokoro", AuxResultOK, true},
+		{"Starting conflict", Starting, "kokoro", AuxResultConflict, false},
+		{"ShuttingDown conflict", ShuttingDown, "kokoro", AuxResultConflict, false},
+		{"unknown not found", Ready, "unknown", AuxResultNotFound, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, _, _, _, _ := newTestMachine()
+			aux := &fakeAuxController{
+				names:     []string{"kokoro", "whisper"},
+				isRunning: map[string]bool{"kokoro": false, "whisper": true},
+			}
+			m.SetAuxContainers(aux)
+			m.state = tc.state
+
+			got := m.StopAuxContainer(tc.auxName)
+			if got != tc.want {
+				t.Fatalf("expected %v, got %v", tc.want, got)
+			}
+			if tc.wantStop {
+				if len(aux.stopCalls) != 1 || aux.stopCalls[0] != tc.auxName {
+					t.Fatalf("expected Stop called with %q, got %v", tc.auxName, aux.stopCalls)
+				}
+			} else {
+				if len(aux.stopCalls) != 0 {
+					t.Fatalf("expected Stop not called, got %v", aux.stopCalls)
+				}
+			}
+		})
+	}
+}
+
+func TestStartAuxContainerError(t *testing.T) {
+	m, _, _, _, _, _ := newTestMachine()
+	aux := &fakeAuxController{
+		names:     []string{"kokoro"},
+		isRunning: map[string]bool{"kokoro": false},
+		startErr:  errors.New("docker start failed"),
+	}
+	m.SetAuxContainers(aux)
+	m.state = Ready
+
+	got := m.StartAuxContainer("kokoro")
+	if got != AuxResultError {
+		t.Fatalf("expected AuxResultError, got %v", got)
+	}
+}
+
+func TestStartAuxContainerNilController(t *testing.T) {
+	m, _, _, _, _, _ := newTestMachine()
+	got := m.StartAuxContainer("kokoro")
+	if got != AuxResultNotFound {
+		t.Fatalf("expected AuxResultNotFound, got %v", got)
+	}
+}
+
+func TestStartAuxContainerTransitionMuLocked(t *testing.T) {
+	m, power, _, _, _, _ := newTestMachine()
+	aux := &fakeAuxController{
+		names:     []string{"kokoro"},
+		isRunning: map[string]bool{"kokoro": false},
+	}
+	m.SetAuxContainers(aux)
+	power.block = make(chan struct{})
+	m.PowerOn()
+
+	got := m.StartAuxContainer("kokoro")
+	if got != AuxResultConflict {
+		t.Fatalf("expected AuxResultConflict, got %v", got)
+	}
+	if len(aux.startCalls) != 0 {
+		t.Fatalf("expected Start not called during transition")
+	}
+
+	close(power.block)
+	m.Wait()
+}
+
+func TestStartAuxContainerConcurrentAuxOperation(t *testing.T) {
+	m, _, _, _, _, _ := newTestMachine()
+	aux := &fakeAuxController{
+		names:     []string{"kokoro", "whisper"},
+		isRunning: map[string]bool{"kokoro": false, "whisper": true},
+	}
+	m.SetAuxContainers(aux)
+	m.state = Ready
+
+	// Acquire transitionMu directly to simulate another aux operation in progress.
+	m.transitionMu.Lock()
+	got := m.StartAuxContainer("kokoro")
+	m.transitionMu.Unlock()
+	if got != AuxResultConflict {
+		t.Fatalf("expected AuxResultConflict, got %v", got)
+	}
+	if len(aux.startCalls) != 0 {
+		t.Fatalf("expected Start not called while transitionMu held")
+	}
+}
+
+func TestShutdownStopsAuxContainers(t *testing.T) {
+	m, power, gpu, docker, _, _ := newTestMachine()
+	aux := &fakeAuxController{
+		names:     []string{"kokoro", "whisper"},
+		isRunning: map[string]bool{"kokoro": true, "whisper": true},
+	}
+	m.SetAuxContainers(aux)
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+
+	var dockerStoppedBeforeAux bool
+	docker.stopCallback = func() {
+		if aux.stopAllCalls == 0 {
+			dockerStoppedBeforeAux = true
+		}
+	}
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off, got %v", m.state)
+	}
+	if docker.stopCalls == 0 {
+		t.Fatalf("expected llama-swap Stop called")
+	}
+	if aux.stopAllCalls != 1 {
+		t.Fatalf("expected StopAll called once, got %d", aux.stopAllCalls)
+	}
+	if !dockerStoppedBeforeAux {
+		t.Fatalf("expected llama-swap Stop before aux StopAll")
+	}
+}
+
+func TestShutdownAuxStopAllError(t *testing.T) {
+	m, power, gpu, docker, _, unbinder := newTestMachine()
+	aux := &fakeAuxController{
+		names:      []string{"kokoro"},
+		isRunning:  map[string]bool{"kokoro": true},
+		stopAllErr: errors.New("stop all failed"),
+	}
+	m.SetAuxContainers(aux)
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Error {
+		t.Fatalf("expected Error, got %v", m.state)
+	}
+	if m.lastError == nil {
+		t.Fatalf("expected lastError")
+	}
+	if !strings.Contains(m.lastError.Error(), "aux container stop") {
+		t.Fatalf("expected lastError to mention aux container stop, got %v", m.lastError)
+	}
+	if unbinder.calls != 0 {
+		t.Fatalf("expected unbind not called, got %d", unbinder.calls)
+	}
+	if !power.on {
+		t.Fatalf("expected power to remain on")
+	}
+}
+
+func TestShutdownFromErrorStopsAuxContainers(t *testing.T) {
+	m, power, gpu, docker, _, _ := newTestMachine()
+	aux := &fakeAuxController{
+		names:     []string{"kokoro"},
+		isRunning: map[string]bool{"kokoro": true},
+	}
+	m.SetAuxContainers(aux)
+	m.state = Error
+	m.lastError = errors.New("previous error")
+	power.on = true
+	gpu.present = true
+	docker.running = true
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off, got %v", m.state)
+	}
+	if aux.stopAllCalls != 1 {
+		t.Fatalf("expected StopAll called once, got %d", aux.stopAllCalls)
+	}
+}
+
+func TestShutdownNilAuxController(t *testing.T) {
+	m, power, gpu, docker, _, _ := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off, got %v", m.state)
+	}
+}
+
+func TestRestartStopsAuxContainersButDoesNotStartThem(t *testing.T) {
+	m, power, gpu, docker, health, _ := newTestMachine()
+	aux := &fakeAuxController{
+		names:     []string{"kokoro"},
+		isRunning: map[string]bool{"kokoro": true},
+	}
+	m.SetAuxContainers(aux)
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	health.healthy = true
+
+	if got := m.Restart(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready, got %v", m.state)
+	}
+	if aux.stopAllCalls != 1 {
+		t.Fatalf("expected StopAll called once during restart, got %d", aux.stopAllCalls)
+	}
+	if len(aux.startCalls) != 0 {
+		t.Fatalf("expected aux Start not called during restart startup, got %v", aux.startCalls)
+	}
+}
+
+func TestStatusAuxContainers(t *testing.T) {
+	m, _, _, _, _, _ := newTestMachine()
+	aux := &fakeAuxController{
+		names:     []string{"kokoro", "whisper"},
+		isRunning: map[string]bool{"kokoro": true, "whisper": false},
+	}
+	m.SetAuxContainers(aux)
+	m.state = Ready
+
+	status := m.Status()
+	want := []AuxContainerStatus{
+		{Name: "kokoro", Running: true},
+		{Name: "whisper", Running: false},
+	}
+	if !reflect.DeepEqual(status.AuxContainers, want) {
+		t.Fatalf("expected auxContainers %v, got %v", want, status.AuxContainers)
+	}
+}
+
+func TestStatusAuxContainersNil(t *testing.T) {
+	m, _, _, _, _, _ := newTestMachine()
+	m.state = Ready
+
+	status := m.Status()
+	if status.AuxContainers == nil {
+		t.Fatalf("expected non-nil empty AuxContainers")
+	}
+	if len(status.AuxContainers) != 0 {
+		t.Fatalf("expected empty AuxContainers, got %v", status.AuxContainers)
+	}
+
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+	if !strings.Contains(string(data), `"auxContainers":[]`) {
+		t.Fatalf("expected JSON to contain \"auxContainers\":[], got %s", string(data))
+	}
+}
+
+func TestStatusAuxContainersProbeError(t *testing.T) {
+	m, _, _, _, _, _, handler := newTestMachineWithRecorder()
+	aux := &fakeAuxController{
+		names:        []string{"kokoro"},
+		isRunning:    map[string]bool{"kokoro": true},
+		isRunningErr: errors.New("docker unreachable"),
+	}
+	m.SetAuxContainers(aux)
+	m.state = Ready
+
+	status := m.Status()
+	if len(status.AuxContainers) != 1 {
+		t.Fatalf("expected 1 aux container status, got %d", len(status.AuxContainers))
+	}
+	if status.AuxContainers[0].Running {
+		t.Fatalf("expected Running false on error")
+	}
+	if !handler.hasRecord(slog.LevelWarn, "Aux container status probe failed") {
+		t.Fatalf("expected WARN log for aux container probe failure")
 	}
 }

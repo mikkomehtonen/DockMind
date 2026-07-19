@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -296,7 +297,7 @@ shutdown:
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if *cfg != tc.want {
+			if !reflect.DeepEqual(*cfg, tc.want) {
 				t.Fatalf("config mismatch:\n got: %+v\nwant: %+v", *cfg, tc.want)
 			}
 		})
@@ -670,5 +671,141 @@ gateway:
 			}
 			tc.assert(t, cfg)
 		})
+	}
+}
+
+func TestAuxContainersConfig(t *testing.T) {
+	tmp := t.TempDir()
+
+	cases := []struct {
+		name    string
+		content string
+		assert  func(t *testing.T, cfg *Config)
+		wantErr bool
+		errSubs []string
+	}{
+		{
+			name: "valid two aux containers",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+auxContainers:
+  - name: kokoro
+    container: kokoro-tts
+  - name: whisper
+    container: whisper-stt
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if len(cfg.AuxContainers) != 2 {
+					t.Fatalf("expected 2 aux containers, got %d", len(cfg.AuxContainers))
+				}
+				if cfg.AuxContainers[0].Name != "kokoro" || cfg.AuxContainers[0].Container != "kokoro-tts" {
+					t.Errorf("unexpected first aux container: %+v", cfg.AuxContainers[0])
+				}
+				if cfg.AuxContainers[1].Name != "whisper" || cfg.AuxContainers[1].Container != "whisper-stt" {
+					t.Errorf("unexpected second aux container: %+v", cfg.AuxContainers[1])
+				}
+			},
+		},
+		{
+			name: "no auxContainers key",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if len(cfg.AuxContainers) != 0 {
+					t.Errorf("expected no aux containers, got %d", len(cfg.AuxContainers))
+				}
+			},
+		},
+		{
+			name: "missing name",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+auxContainers:
+  - container: kokoro-tts
+`,
+			wantErr: true,
+			errSubs: []string{"auxContainers", "name"},
+		},
+		{
+			name: "missing container",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+auxContainers:
+  - name: kokoro
+`,
+			wantErr: true,
+			errSubs: []string{"auxContainers", "container"},
+		},
+		{
+			name: "duplicate names",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+auxContainers:
+  - name: kokoro
+    container: kokoro-tts
+  - name: kokoro
+    container: whisper-stt
+`,
+			wantErr: true,
+			errSubs: []string{"duplicate"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(tmp, tc.name+".yaml")
+			if err := os.WriteFile(path, []byte(tc.content), 0644); err != nil {
+				t.Fatalf("write file: %v", err)
+			}
+
+			cfg, err := Load(path)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				for _, sub := range tc.errSubs {
+					if !strings.Contains(err.Error(), sub) {
+						t.Errorf("expected error to contain %q, got: %v", sub, err)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			tc.assert(t, cfg)
+		})
+	}
+}
+
+func TestLoadConfigsExample(t *testing.T) {
+	path := filepath.Join("..", "..", "configs", "config.yaml")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("configs/config.yaml failed to load: %v", err)
+	}
+	if len(cfg.AuxContainers) != 0 {
+		t.Errorf("expected no aux containers in example config, got %d", len(cfg.AuxContainers))
 	}
 }

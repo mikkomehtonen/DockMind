@@ -11,10 +11,14 @@ import (
 )
 
 type fakeStateMachine struct {
-	status   state.StatusResponse
-	powerOn  state.PowerResult
-	powerOff state.PowerResult
-	restart  state.PowerResult
+	status           state.StatusResponse
+	powerOn          state.PowerResult
+	powerOff         state.PowerResult
+	restart          state.PowerResult
+	startAux         state.AuxResult
+	stopAux          state.AuxResult
+	startAuxReceived string
+	stopAuxReceived  string
 }
 
 type fakeIdleReporter struct {
@@ -39,6 +43,112 @@ func (f *fakeStateMachine) PowerOff() state.PowerResult {
 
 func (f *fakeStateMachine) Restart() state.PowerResult {
 	return f.restart
+}
+
+func (f *fakeStateMachine) StartAuxContainer(name string) state.AuxResult {
+	f.startAuxReceived = name
+	return f.startAux
+}
+
+func (f *fakeStateMachine) StopAuxContainer(name string) state.AuxResult {
+	f.stopAuxReceived = name
+	return f.stopAux
+}
+
+func TestAuxContainerRoutes(t *testing.T) {
+	cases := []struct {
+		name           string
+		method         string
+		path           string
+		setup          func(*fakeStateMachine)
+		wantStatus     int
+		wantEmptyBody  bool
+		wantNamePassed string
+	}{
+		{
+			name:   "POST /containers/kokoro/start OK",
+			method: http.MethodPost,
+			path:   "/containers/kokoro/start",
+			setup: func(f *fakeStateMachine) {
+				f.startAux = state.AuxResultOK
+			},
+			wantStatus:     http.StatusOK,
+			wantEmptyBody:  true,
+			wantNamePassed: "kokoro",
+		},
+		{
+			name:   "POST /containers/kokoro/stop OK",
+			method: http.MethodPost,
+			path:   "/containers/kokoro/stop",
+			setup: func(f *fakeStateMachine) {
+				f.stopAux = state.AuxResultOK
+			},
+			wantStatus:     http.StatusOK,
+			wantEmptyBody:  true,
+			wantNamePassed: "kokoro",
+		},
+		{
+			name:   "POST /containers/unknown/start NotFound",
+			method: http.MethodPost,
+			path:   "/containers/unknown/start",
+			setup: func(f *fakeStateMachine) {
+				f.startAux = state.AuxResultNotFound
+			},
+			wantStatus:    http.StatusNotFound,
+			wantEmptyBody: true,
+		},
+		{
+			name:   "POST /containers/kokoro/start Conflict",
+			method: http.MethodPost,
+			path:   "/containers/kokoro/start",
+			setup: func(f *fakeStateMachine) {
+				f.startAux = state.AuxResultConflict
+			},
+			wantStatus:    http.StatusConflict,
+			wantEmptyBody: true,
+		},
+		{
+			name:   "POST /containers/kokoro/start Error",
+			method: http.MethodPost,
+			path:   "/containers/kokoro/start",
+			setup: func(f *fakeStateMachine) {
+				f.startAux = state.AuxResultError
+			},
+			wantStatus:    http.StatusInternalServerError,
+			wantEmptyBody: true,
+		},
+		{
+			name:       "GET /containers/kokoro/start wrong method",
+			method:     http.MethodGet,
+			path:       "/containers/kokoro/start",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeStateMachine{}
+			if tc.setup != nil {
+				tc.setup(fake)
+			}
+			server := NewServer(fake, nil)
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d", tc.wantStatus, rec.Code)
+			}
+			if tc.wantEmptyBody && rec.Body.String() != "" {
+				t.Fatalf("expected empty body, got %q", rec.Body.String())
+			}
+			if tc.wantNamePassed != "" {
+				if fake.startAuxReceived != tc.wantNamePassed && fake.stopAuxReceived != tc.wantNamePassed {
+					t.Fatalf("expected name %q passed to state machine, got start=%q stop=%q", tc.wantNamePassed, fake.startAuxReceived, fake.stopAuxReceived)
+				}
+			}
+		})
+	}
 }
 
 func TestRoutes(t *testing.T) {
@@ -172,6 +282,16 @@ func TestRoutes(t *testing.T) {
 			wantBody:   `"cooldownRemaining":45.5`,
 		},
 		{
+			name:   "GET /status includes auxContainers",
+			method: http.MethodGet,
+			path:   "/status",
+			setup: func(f *fakeStateMachine) {
+				f.status = state.StatusResponse{State: "Ready", AuxContainers: []state.AuxContainerStatus{{Name: "kokoro", Running: true}}}
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `"auxContainers"`,
+		},
+		{
 			name:          "GET /health",
 			method:        http.MethodGet,
 			path:          "/health",
@@ -283,7 +403,7 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected paths to be an object")
 		}
-		for _, p := range []string{"/status", "/power/on", "/power/off", "/restart", "/health", "/v1/models", "/v1/chat/completions"} {
+		for _, p := range []string{"/status", "/power/on", "/power/off", "/restart", "/health", "/containers/{name}/start", "/containers/{name}/stop", "/v1/models", "/v1/chat/completions"} {
 			if _, ok := paths[p]; !ok {
 				t.Fatalf("expected paths to contain %q", p)
 			}
@@ -305,7 +425,7 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected components.schemas.StatusResponse.properties to be an object")
 		}
-		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "gpuProcesses", "lastError", "cooldownRemaining", "idleRemaining"} {
+		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "gpuProcesses", "lastError", "cooldownRemaining", "idleRemaining", "auxContainers"} {
 			if _, ok := properties[field]; !ok {
 				t.Fatalf("expected StatusResponse properties to contain %q", field)
 			}
@@ -326,6 +446,26 @@ func TestSwaggerRoutes(t *testing.T) {
 			}
 			if _, ok := responses["429"]; !ok {
 				t.Fatalf("expected %q responses to contain 429", p)
+			}
+		}
+
+		for _, p := range []string{"/containers/{name}/start", "/containers/{name}/stop"} {
+			pathObj, ok := paths[p].(map[string]any)
+			if !ok {
+				t.Fatalf("expected path %q to be an object", p)
+			}
+			postObj, ok := pathObj["post"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected %q POST to be an object", p)
+			}
+			responses, ok := postObj["responses"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected %q responses to be an object", p)
+			}
+			for _, code := range []string{"200", "404", "409", "500"} {
+				if _, ok := responses[code]; !ok {
+					t.Fatalf("expected %q responses to contain %s", p, code)
+				}
 			}
 		}
 
@@ -352,6 +492,31 @@ func TestSwaggerRoutes(t *testing.T) {
 		}
 	})
 
+}
+
+func TestWebUIAuxCard(t *testing.T) {
+	server := NewServer(&fakeStateMachine{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`id="aux-card"`,
+		`hidden`,
+		`data.auxContainers`,
+		`aux-btn-start`,
+		`aux-btn-stop`,
+		`doAuxAction`,
+		`/containers/`,
+		`encodeURIComponent`,
+		`Running`,
+		`Stopped`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected body to contain %q", want)
+		}
+	}
 }
 
 func TestWebUIRoutes(t *testing.T) {
@@ -402,6 +567,7 @@ func TestWebUIRoutes(t *testing.T) {
 			"/power/on",
 			"/power/off",
 			"/restart",
+			"/containers/",
 			"/docs",
 			"fetch",
 			"setInterval",
@@ -418,6 +584,9 @@ func TestWebUIRoutes(t *testing.T) {
 			"idle-time",
 			"formatIdleRemaining",
 			"idleRemaining",
+			"auxContainers",
+			"aux-card",
+			"Aux Containers",
 		} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("expected body to contain %q, got %q", want, body)

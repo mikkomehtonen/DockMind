@@ -42,6 +42,11 @@ type DockerConfig struct {
 	Container string `yaml:"container"`
 }
 
+type AuxContainerConfig struct {
+	Name      string `yaml:"name"`
+	Container string `yaml:"container"`
+}
+
 type LlamaSwapConfig struct {
 	HealthURL  string `yaml:"healthUrl"`
 	BackendURL string `yaml:"backendUrl"`
@@ -73,15 +78,16 @@ type PowerConfig struct {
 }
 
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	Shelly    ShellyConfig    `yaml:"shelly"`
-	Docker    DockerConfig    `yaml:"docker"`
-	LlamaSwap LlamaSwapConfig `yaml:"llamaSwap"`
-	GPU       GPUConfig       `yaml:"gpu"`
-	Startup   StartupConfig   `yaml:"startup"`
-	Shutdown  ShutdownConfig  `yaml:"shutdown"`
-	Gateway   GatewayConfig   `yaml:"gateway"`
-	Power     PowerConfig     `yaml:"power"`
+	Server        ServerConfig         `yaml:"server"`
+	Shelly        ShellyConfig         `yaml:"shelly"`
+	Docker        DockerConfig         `yaml:"docker"`
+	AuxContainers []AuxContainerConfig `yaml:"auxContainers"`
+	LlamaSwap     LlamaSwapConfig      `yaml:"llamaSwap"`
+	GPU           GPUConfig            `yaml:"gpu"`
+	Startup       StartupConfig        `yaml:"startup"`
+	Shutdown      ShutdownConfig       `yaml:"shutdown"`
+	Gateway       GatewayConfig        `yaml:"gateway"`
+	Power         PowerConfig          `yaml:"power"`
 }
 
 func Load(path string) (*Config, error) {
@@ -134,6 +140,19 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Docker.Container == "" {
 		return errors.New("docker.container is required")
+	}
+	seenNames := make(map[string]struct{})
+	for i, aux := range cfg.AuxContainers {
+		if aux.Name == "" {
+			return fmt.Errorf("auxContainers[%d].name is required", i)
+		}
+		if aux.Container == "" {
+			return fmt.Errorf("auxContainers[%d].container is required", i)
+		}
+		if _, ok := seenNames[aux.Name]; ok {
+			return fmt.Errorf("auxContainers[%d].name %q is duplicate", i, aux.Name)
+		}
+		seenNames[aux.Name] = struct{}{}
 	}
 	if cfg.LlamaSwap.HealthURL == "" {
 		return errors.New("llamaSwap.healthUrl is required")

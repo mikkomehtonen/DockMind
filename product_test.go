@@ -49,6 +49,9 @@ func TestProductDoc(t *testing.T) {
 	if !strings.Contains(body, "017-gpu-process-guard") {
 		t.Error("docs/product.md Features list does not reference the 017-gpu-process-guard story")
 	}
+	if !strings.Contains(body, "018-optional-containers") {
+		t.Error("docs/product.md Features list does not reference the 018-optional-containers story")
+	}
 	if strings.Contains(body, "Web UI, Prometheus metrics, or request queuing during startup") {
 		t.Error("docs/product.md still lists Web UI as a non-goal")
 	}

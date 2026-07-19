@@ -53,6 +53,13 @@ func main() {
 		cfg.Power.Cooldown.Duration(),
 	)
 
+	auxSpecs := make([]docker.ContainerSpec, len(cfg.AuxContainers))
+	for i, aux := range cfg.AuxContainers {
+		auxSpecs[i] = docker.ContainerSpec{Name: aux.Name, Container: aux.Container}
+	}
+	auxManager := docker.NewManager(auxSpecs)
+	machine.SetAuxContainers(auxManager)
+
 	server := api.NewServer(machine, logger)
 
 	var gw *gateway.Gateway

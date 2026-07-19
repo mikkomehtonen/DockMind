@@ -224,3 +224,165 @@ func TestIsRunningExecError(t *testing.T) {
 		t.Fatalf("expected false on exec error")
 	}
 }
+
+func newTestManager(specs []ContainerSpec) (*Manager, *[][]string) {
+	var calls [][]string
+	m := NewManager(specs)
+	m.SetExec(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		call := append([]string{name}, args...)
+		calls = append(calls, call)
+		return []byte(""), nil
+	})
+	return m, &calls
+}
+
+func TestManagerStart(t *testing.T) {
+	m, calls := newTestManager([]ContainerSpec{
+		{Name: "kokoro", Container: "kokoro-tts"},
+		{Name: "whisper", Container: "whisper-stt"},
+	})
+
+	if err := m.Start(context.Background(), "kokoro"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected 1 exec call, got %d", len(*calls))
+	}
+	if !reflect.DeepEqual((*calls)[0], []string{"docker", "start", "kokoro-tts"}) {
+		t.Fatalf("expected docker start kokoro-tts, got %v", (*calls)[0])
+	}
+}
+
+func TestManagerStartUnknown(t *testing.T) {
+	m, _ := newTestManager([]ContainerSpec{
+		{Name: "kokoro", Container: "kokoro-tts"},
+	})
+
+	err := m.Start(context.Background(), "unknown")
+	if err != ErrUnknownContainer {
+		t.Fatalf("expected ErrUnknownContainer, got %v", err)
+	}
+}
+
+func TestManagerStop(t *testing.T) {
+	m, calls := newTestManager([]ContainerSpec{
+		{Name: "kokoro", Container: "kokoro-tts"},
+		{Name: "whisper", Container: "whisper-stt"},
+	})
+
+	if err := m.Stop(context.Background(), "whisper"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected 1 exec call, got %d", len(*calls))
+	}
+	if !reflect.DeepEqual((*calls)[0], []string{"docker", "stop", "whisper-stt"}) {
+		t.Fatalf("expected docker stop whisper-stt, got %v", (*calls)[0])
+	}
+}
+
+func TestManagerStopAll(t *testing.T) {
+	m, calls := newTestManager([]ContainerSpec{
+		{Name: "kokoro", Container: "kokoro-tts"},
+		{Name: "whisper", Container: "whisper-stt"},
+	})
+
+	if err := m.StopAll(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 exec calls, got %d", len(*calls))
+	}
+	if !reflect.DeepEqual((*calls)[0], []string{"docker", "stop", "kokoro-tts"}) {
+		t.Fatalf("expected first call docker stop kokoro-tts, got %v", (*calls)[0])
+	}
+	if !reflect.DeepEqual((*calls)[1], []string{"docker", "stop", "whisper-stt"}) {
+		t.Fatalf("expected second call docker stop whisper-stt, got %v", (*calls)[1])
+	}
+}
+
+func TestManagerNames(t *testing.T) {
+	m, _ := newTestManager([]ContainerSpec{
+		{Name: "kokoro", Container: "kokoro-tts"},
+		{Name: "whisper", Container: "whisper-stt"},
+	})
+
+	names := m.Names()
+	if !reflect.DeepEqual(names, []string{"kokoro", "whisper"}) {
+		t.Fatalf("expected names [kokoro whisper], got %v", names)
+	}
+}
+
+func TestManagerNamesEmpty(t *testing.T) {
+	m, _ := newTestManager(nil)
+
+	names := m.Names()
+	if names == nil {
+		t.Fatalf("expected non-nil empty slice")
+	}
+	if len(names) != 0 {
+		t.Fatalf("expected empty names, got %v", names)
+	}
+}
+
+func TestManagerStopAllFailFast(t *testing.T) {
+	m := NewManager([]ContainerSpec{
+		{Name: "kokoro", Container: "kokoro-tts"},
+		{Name: "whisper", Container: "whisper-stt"},
+	})
+	var calls int
+	m.SetExec(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return nil, &exec.ExitError{Stderr: []byte("stop failed")}
+		}
+		return []byte(""), nil
+	})
+
+	err := m.StopAll(context.Background())
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if calls != 1 {
+		t.Fatalf("expected 1 call before fail-fast, got %d", calls)
+	}
+}
+
+func TestManagerStopAllEmpty(t *testing.T) {
+	m, _ := newTestManager(nil)
+
+	if err := m.StopAll(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestManagerIsRunningUnknown(t *testing.T) {
+	m, _ := newTestManager([]ContainerSpec{
+		{Name: "kokoro", Container: "kokoro-tts"},
+	})
+
+	got, err := m.IsRunning(context.Background(), "unknown")
+	if err != ErrUnknownContainer {
+		t.Fatalf("expected ErrUnknownContainer, got %v", err)
+	}
+	if got {
+		t.Fatalf("expected false")
+	}
+}
+
+func TestManagerIsRunningNoSuchContainer(t *testing.T) {
+	m := NewManager([]ContainerSpec{
+		{Name: "kokoro", Container: "kokoro-tts"},
+	})
+	m.SetExec(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, &exec.ExitError{Stderr: []byte("No such container")}
+	})
+
+	got, err := m.IsRunning(context.Background(), "kokoro")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got {
+		t.Fatalf("expected false")
+	}
+}
