@@ -802,6 +802,33 @@ func TestWebUIRoutes(t *testing.T) {
 	})
 }
 
+func TestComponentsCardOrder(t *testing.T) {
+	server := NewServer(&fakeStateMachine{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	body := rec.Body.String()
+	for _, id := range []string{`id="gpu-dot"`, `id="shelly-dot"`, `id="swap-dot"`, `id="health-dot"`} {
+		if strings.Count(body, id) != 1 {
+			t.Fatalf("expected %q to appear exactly once, got %d", id, strings.Count(body, id))
+		}
+	}
+
+	shellyIdx := strings.Index(body, `id="shelly-dot"`)
+	gpuIdx := strings.Index(body, `id="gpu-dot"`)
+	if shellyIdx == -1 || gpuIdx == -1 {
+		t.Fatalf("expected both shelly-dot and gpu-dot to be present")
+	}
+	if shellyIdx > gpuIdx {
+		t.Fatalf("expected shelly-dot (index %d) to appear before gpu-dot (index %d)", shellyIdx, gpuIdx)
+	}
+}
+
 func TestGatewayRoutes(t *testing.T) {
 	t.Run("no handlers returns 404", func(t *testing.T) {
 		server := NewServer(&fakeStateMachine{}, nil)
