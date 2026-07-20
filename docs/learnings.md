@@ -96,4 +96,10 @@
 **What happened**: Story 021 required testing web UI button enablement and feedback messages for different state inputs. The project has no JS test runner and only Go stdlib tests, so the new tests (`TestWebUIAuxStartGatedOnReady`, `TestWebUIAuxStartFeedbackMessage`) verify the exact JS source strings and conditional patterns in the served HTML rather than executing `render()` or `doAuxAction()`.
 **Takeaway**: For web UI stories, test dynamic behavior by asserting the presence of the expected JS logic in the served HTML. Do not add a JS test runner or external browser dependency; keep UI tests as Go string-presence checks that pin the exact conditional expressions and message strings.
 
+## Avoid parallel test functions that re-cover existing table-driven cases
+**Date**: 2026-07-20
+**Area**: testing / code review
+**What happened**: In story 023, `TestStatusGPUMemoryProbedWhenGPUPresent` was added to verify GPU memory probing when the GPU is present. It re-covered four scenarios already tested by `TestStatusIncludesGPUProcesses` (Ready with processes, Ready with no processes, Off with GPU absent, AwaitingGPUFree) and `TestStatusGPUMemoryProbeFailure` (memory probe error). The code reviewer flagged this as a non-blocking simplicity issue because future changes would need updates in two places.
+**Takeaway**: Before adding a new test function, check whether the existing table-driven tests can absorb the new assertions. Extend the existing table with extra fields (e.g., `wantLog`, `wantUtilization`) rather than creating a parallel test that repeats the same scenarios. Add a separate test function only when the assertions genuinely do not fit the existing structure.
+
 

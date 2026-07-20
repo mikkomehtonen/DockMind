@@ -457,7 +457,7 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected gpuMemory.properties to be an object")
 		}
-		for _, field := range []string{"total", "used", "free"} {
+		for _, field := range []string{"total", "used", "free", "utilization"} {
 			if _, ok := memProps[field]; !ok {
 				t.Fatalf("expected gpuMemory.properties to contain %q", field)
 			}
@@ -720,6 +720,12 @@ func TestWebUIRoutes(t *testing.T) {
 			"VRAM_CRIT_PCT",
 			"NaN",
 			"style.width",
+			"gpu-procs__util",
+			"id=\"gpu-procs-util\"",
+			"gpu-procs__util-bar",
+			"gpu-procs__util-fill",
+			"gpuMemory.utilization",
+			"Utilization:",
 		} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("expected body to contain %q, got %q", want, body)
@@ -739,6 +745,12 @@ func TestWebUIRoutes(t *testing.T) {
 		}
 		if strings.Contains(body, "preventing power off") {
 			t.Fatalf("expected body to NOT contain the misleading label \"preventing power off\", got %q", body)
+		}
+		if strings.Contains(body, "gpu-procs__util-fill--warn") {
+			t.Fatalf("expected body to NOT contain gpu-procs__util-fill--warn")
+		}
+		if strings.Contains(body, "gpu-procs__util-fill--crit") {
+			t.Fatalf("expected body to NOT contain gpu-procs__util-fill--crit")
 		}
 	})
 

@@ -191,7 +191,8 @@ shows an auto-shutdown countdown. The countdown is hidden when the state is not
   "gpuMemory": {
     "total": "16311 MiB",
     "used": "12742 MiB",
-    "free": "3108 MiB"
+    "free": "3108 MiB",
+    "utilization": "24 %"
   },
   "lastError": null,
   "cooldownRemaining": 0,

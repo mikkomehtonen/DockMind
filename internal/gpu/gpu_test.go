@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/dockmind/dockmind/internal/state"
@@ -121,13 +122,18 @@ func TestMemory(t *testing.T) {
 	}{
 		{
 			name:   "single gpu",
-			stdout: "16311 MiB, 12742 MiB, 3108 MiB\n",
-			want:   state.GPUMemory{Total: "16311 MiB", Used: "12742 MiB", Free: "3108 MiB"},
+			stdout: "16311 MiB, 12742 MiB, 3108 MiB, 24 %\n",
+			want:   state.GPUMemory{Total: "16311 MiB", Used: "12742 MiB", Free: "3108 MiB", Utilization: "24 %"},
+		},
+		{
+			name:   "idle gpu",
+			stdout: "16311 MiB, 0 MiB, 16311 MiB, 0 %\n",
+			want:   state.GPUMemory{Total: "16311 MiB", Used: "0 MiB", Free: "16311 MiB", Utilization: "0 %"},
 		},
 		{
 			name:   "multiple gpus first line",
-			stdout: "16311 MiB, 12742 MiB, 3108 MiB\n24576 MiB, 0 MiB, 24576 MiB\n",
-			want:   state.GPUMemory{Total: "16311 MiB", Used: "12742 MiB", Free: "3108 MiB"},
+			stdout: "16311 MiB, 12742 MiB, 3108 MiB, 24 %\n24576 MiB, 0 MiB, 24576 MiB, 0 %\n",
+			want:   state.GPUMemory{Total: "16311 MiB", Used: "12742 MiB", Free: "3108 MiB", Utilization: "24 %"},
 		},
 		{
 			name:    "empty stdout",
@@ -136,7 +142,7 @@ func TestMemory(t *testing.T) {
 		},
 		{
 			name:    "missing fields",
-			stdout:  "16311 MiB, 12742 MiB\n",
+			stdout:  "16311 MiB, 12742 MiB, 3108 MiB\n",
 			wantErr: true,
 		},
 		{
@@ -169,6 +175,41 @@ func TestMemory(t *testing.T) {
 				t.Fatalf("expected %+v, got %+v", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestMemoryQueryIncludesUtilization(t *testing.T) {
+	var gotName string
+	var gotArgs []string
+	m := &Monitor{
+		exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			gotName = name
+			gotArgs = args
+			return []byte("16311 MiB, 12742 MiB, 3108 MiB, 24 %\n"), nil
+		},
+	}
+	_, err := m.Memory(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotName != "nvidia-smi" {
+		t.Fatalf("expected nvidia-smi, got %q", gotName)
+	}
+	if len(gotArgs) != 2 {
+		t.Fatalf("expected 2 args, got %d: %v", len(gotArgs), gotArgs)
+	}
+	if gotArgs[0] != "--query-gpu=memory.total,memory.used,memory.free,utilization.gpu" {
+		t.Fatalf("unexpected query arg: %q", gotArgs[0])
+	}
+	if gotArgs[1] != "--format=csv,noheader" {
+		t.Fatalf("unexpected format arg: %q", gotArgs[1])
+	}
+	query := strings.Join(gotArgs, " ")
+	if !strings.Contains(query, "utilization.gpu") {
+		t.Fatalf("expected query to contain utilization.gpu, got %q", query)
+	}
+	if strings.Count(query, "utilization.gpu") != 1 {
+		t.Fatalf("expected utilization.gpu exactly once, got %d", strings.Count(query, "utilization.gpu"))
 	}
 }
 

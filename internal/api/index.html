@@ -390,6 +390,27 @@
       background: var(--danger);
     }
 
+    .gpu-procs__util {
+      margin: 0.25rem 0 0;
+      font-size: var(--fs-sm);
+      color: var(--muted);
+    }
+
+    .gpu-procs__util-bar {
+      width: 100%;
+      height: 0.5rem;
+      background: var(--surface-2);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .gpu-procs__util-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: var(--primary);
+      transition: width 200ms ease;
+    }
+
     .aux {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -476,7 +497,8 @@
       .component__dot,
       .state__badge,
       .btn,
-      .gpu-procs__vram-fill {
+      .gpu-procs__vram-fill,
+      .gpu-procs__util-fill {
         transition: none;
       }
     }
@@ -548,6 +570,10 @@
       <div class="gpu-procs__vram-bar" id="gpu-procs-vram-bar" hidden>
         <div class="gpu-procs__vram-fill" id="gpu-procs-vram-fill"></div>
       </div>
+      <p class="gpu-procs__util" id="gpu-procs-util"></p>
+      <div class="gpu-procs__util-bar" id="gpu-procs-util-bar" hidden>
+        <div class="gpu-procs__util-fill" id="gpu-procs-util-fill"></div>
+      </div>
     </section>
 
     <section class="error" id="error-banner" hidden>
@@ -610,6 +636,9 @@
       gpuProcsMemory: document.getElementById("gpu-procs-memory"),
       gpuProcsVramBar: document.getElementById("gpu-procs-vram-bar"),
       gpuProcsVramFill: document.getElementById("gpu-procs-vram-fill"),
+      gpuProcsUtil: document.getElementById("gpu-procs-util"),
+      gpuProcsUtilBar: document.getElementById("gpu-procs-util-bar"),
+      gpuProcsUtilFill: document.getElementById("gpu-procs-util-fill"),
       auxCard: document.getElementById("aux-card"),
       auxList: document.getElementById("aux-list"),
       cooldown: document.getElementById("cooldown"),
@@ -722,9 +751,9 @@
         els.errorMessage.textContent = "";
       }
 
-      if (data.gpuProcesses && data.gpuProcesses.length > 0) {
+      if (data.gpuPresent) {
         els.gpuProcsBanner.hidden = false;
-        els.gpuProcsList.innerHTML = data.gpuProcesses
+        els.gpuProcsList.innerHTML = (data.gpuProcesses || [])
           .map(p => `<li>${escapeHtml(p.name)} (PID ${p.pid}, ${escapeHtml(p.usedGpuMemory || "—")})</li>`)
           .join("");
         if (data.gpuMemory && data.gpuMemory.total) {
@@ -746,11 +775,27 @@
           els.gpuProcsMemory.textContent = "";
           els.gpuProcsVramBar.hidden = true;
         }
+        if (data.gpuMemory && data.gpuMemory.utilization) {
+          els.gpuProcsUtil.textContent = `Utilization: ${data.gpuMemory.utilization}`;
+          const utilNum = parseInt(data.gpuMemory.utilization, 10);
+          if (isNaN(utilNum)) {
+            els.gpuProcsUtilBar.hidden = true;
+          } else {
+            const utilPct = Math.min(100, Math.max(0, utilNum));
+            els.gpuProcsUtilBar.hidden = false;
+            els.gpuProcsUtilFill.style.width = utilPct + "%";
+          }
+        } else {
+          els.gpuProcsUtil.textContent = "";
+          els.gpuProcsUtilBar.hidden = true;
+        }
       } else {
         els.gpuProcsBanner.hidden = true;
         els.gpuProcsList.innerHTML = "";
         els.gpuProcsMemory.textContent = "";
         els.gpuProcsVramBar.hidden = true;
+        els.gpuProcsUtil.textContent = "";
+        els.gpuProcsUtilBar.hidden = true;
       }
 
       const auxStartEnabled = (data.state === "Ready") && data.cooldownRemaining <= 0;

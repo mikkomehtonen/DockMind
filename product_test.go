@@ -55,6 +55,9 @@ func TestProductDoc(t *testing.T) {
 	if !strings.Contains(body, "021-aux-containers-gpu-gate") {
 		t.Error("docs/product.md Features list does not reference the 021-aux-containers-gpu-gate story")
 	}
+	if !strings.Contains(body, "023-gpu-utilization-display") {
+		t.Error("docs/product.md Features list does not reference the 023-gpu-utilization-display story")
+	}
 	if strings.Contains(body, "Web UI, Prometheus metrics, or request queuing during startup") {
 		t.Error("docs/product.md still lists Web UI as a non-goal")
 	}

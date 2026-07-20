@@ -76,7 +76,7 @@ func (m *Monitor) Processes(ctx context.Context) ([]state.GPUProcess, error) {
 }
 
 func (m *Monitor) Memory(ctx context.Context) (state.GPUMemory, error) {
-	out, err := m.exec(ctx, "nvidia-smi", "--query-gpu=memory.total,memory.used,memory.free", "--format=csv,noheader")
+	out, err := m.exec(ctx, "nvidia-smi", "--query-gpu=memory.total,memory.used,memory.free,utilization.gpu", "--format=csv,noheader")
 	if err != nil {
 		return state.GPUMemory{}, err
 	}
@@ -87,14 +87,15 @@ func (m *Monitor) Memory(ctx context.Context) (state.GPUMemory, error) {
 		if trimmed == "" {
 			continue
 		}
-		fields := strings.SplitN(trimmed, ", ", 3)
-		if len(fields) < 3 {
+		fields := strings.SplitN(trimmed, ", ", 4)
+		if len(fields) < 4 {
 			return state.GPUMemory{}, fmt.Errorf("unexpected nvidia-smi memory output: %q", trimmed)
 		}
 		return state.GPUMemory{
-			Total: fields[0],
-			Used:  fields[1],
-			Free:  fields[2],
+			Total:       fields[0],
+			Used:        fields[1],
+			Free:        fields[2],
+			Utilization: fields[3],
 		}, nil
 	}
 	return state.GPUMemory{}, fmt.Errorf("no nvidia-smi memory output")

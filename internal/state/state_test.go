@@ -2081,11 +2081,11 @@ func TestStatusIncludesGPUProcesses(t *testing.T) {
 			state:        Ready,
 			gpuPresent:   true,
 			processes:    []GPUProcess{},
-			memory:       GPUMemory{Total: "16 MiB", Used: "0 MiB", Free: "16 MiB"},
+			memory:       GPUMemory{Total: "16 MiB", Used: "0 MiB", Free: "16 MiB", Utilization: "0 %"},
 			wantCount:    0,
 			wantState:    "Ready",
 			wantNonEmpty: true,
-			wantMemory:   false,
+			wantMemory:   true,
 		},
 	}
 
@@ -2112,7 +2112,7 @@ func TestStatusIncludesGPUProcesses(t *testing.T) {
 					t.Fatalf("expected gpuMemory %+v, got %+v", tc.memory, status.GPUMemory)
 				}
 			} else {
-				if status.GPUMemory.Total != "" || status.GPUMemory.Used != "" || status.GPUMemory.Free != "" {
+				if status.GPUMemory.Total != "" || status.GPUMemory.Used != "" || status.GPUMemory.Free != "" || status.GPUMemory.Utilization != "" {
 					t.Fatalf("expected empty gpuMemory, got %+v", status.GPUMemory)
 				}
 			}
@@ -2131,7 +2131,7 @@ func TestStatusGPUMemoryProbeFailure(t *testing.T) {
 	if len(status.GPUProcesses) != 1 {
 		t.Fatalf("expected 1 gpuProcess, got %d", len(status.GPUProcesses))
 	}
-	if status.GPUMemory.Total != "" || status.GPUMemory.Used != "" || status.GPUMemory.Free != "" {
+	if status.GPUMemory.Total != "" || status.GPUMemory.Used != "" || status.GPUMemory.Free != "" || status.GPUMemory.Utilization != "" {
 		t.Fatalf("expected empty gpuMemory on probe failure, got %+v", status.GPUMemory)
 	}
 	if !gpu.memoryChecked {
@@ -2139,6 +2139,82 @@ func TestStatusGPUMemoryProbeFailure(t *testing.T) {
 	}
 	if !handler.hasRecord(slog.LevelDebug, "GPU memory probe failed") {
 		t.Fatalf("expected Debug log for GPU memory probe failure")
+	}
+}
+
+func TestStatusGPUMemoryProbedWhenGPUPresent(t *testing.T) {
+	cases := []struct {
+		name       string
+		state      State
+		gpuPresent bool
+		processes  []GPUProcess
+		memory     GPUMemory
+		memoryErr  error
+		wantMemory GPUMemory
+		wantCount  int
+		wantLog    bool
+	}{
+		{
+			name:       "ready gpu present no processes",
+			state:      Ready,
+			gpuPresent: true,
+			processes:  []GPUProcess{},
+			memory:     GPUMemory{Total: "16 MiB", Used: "0 MiB", Free: "16 MiB", Utilization: "0 %"},
+			wantMemory: GPUMemory{Total: "16 MiB", Used: "0 MiB", Free: "16 MiB", Utilization: "0 %"},
+			wantCount:  0,
+			wantLog:    false,
+		},
+		{
+			name:       "ready gpu present two processes",
+			state:      Ready,
+			gpuPresent: true,
+			processes:  []GPUProcess{{PID: 1, Name: "a"}, {PID: 2, Name: "b"}},
+			memory:     GPUMemory{Total: "16 MiB", Used: "8 MiB", Free: "8 MiB", Utilization: "24 %"},
+			wantMemory: GPUMemory{Total: "16 MiB", Used: "8 MiB", Free: "8 MiB", Utilization: "24 %"},
+			wantCount:  2,
+			wantLog:    false,
+		},
+		{
+			name:       "off gpu absent",
+			state:      Off,
+			gpuPresent: false,
+			processes:  []GPUProcess{},
+			wantMemory: GPUMemory{},
+			wantCount:  0,
+			wantLog:    false,
+		},
+		{
+			name:       "ready gpu present memory probe fails",
+			state:      Ready,
+			gpuPresent: true,
+			processes:  []GPUProcess{{PID: 1, Name: "a"}},
+			memoryErr:  errors.New("nvidia-smi failed"),
+			wantMemory: GPUMemory{},
+			wantCount:  1,
+			wantLog:    true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, gpu, _, _, _, handler := newTestMachineWithRecorder()
+			m.state = tc.state
+			gpu.present = tc.gpuPresent
+			gpu.processes = tc.processes
+			gpu.memory = tc.memory
+			gpu.memoryErr = tc.memoryErr
+
+			status := m.Status()
+			if status.GPUMemory != tc.wantMemory {
+				t.Fatalf("expected gpuMemory %+v, got %+v", tc.wantMemory, status.GPUMemory)
+			}
+			if len(status.GPUProcesses) != tc.wantCount {
+				t.Fatalf("expected %d gpuProcesses, got %d", tc.wantCount, len(status.GPUProcesses))
+			}
+			if handler.hasRecord(slog.LevelDebug, "GPU memory probe failed") != tc.wantLog {
+				t.Fatalf("expected GPU memory probe failed log=%v", tc.wantLog)
+			}
+		})
 	}
 }
 

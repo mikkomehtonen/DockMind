@@ -62,9 +62,10 @@ type GPUProcess struct {
 }
 
 type GPUMemory struct {
-	Total string `json:"total"`
-	Used  string `json:"used"`
-	Free  string `json:"free"`
+	Total       string `json:"total"`
+	Used        string `json:"used"`
+	Free        string `json:"free"`
+	Utilization string `json:"utilization"`
 }
 
 type GPUMonitor interface {
@@ -317,9 +318,7 @@ func (m *Machine) Status() StatusResponse {
 	var gpuMemory GPUMemory
 	if gpuPresent {
 		gpuProcesses = m.probeGPUProcesses()
-		if gpuProcesses != nil && len(gpuProcesses) > 0 {
-			gpuMemory = m.probeGPUMemory()
-		}
+		gpuMemory = m.probeGPUMemory()
 	}
 	if gpuProcesses == nil {
 		gpuProcesses = []GPUProcess{}
