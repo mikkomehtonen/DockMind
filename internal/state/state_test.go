@@ -2837,3 +2837,193 @@ func TestStatusAuxContainersProbeError(t *testing.T) {
 		t.Fatalf("expected WARN log for aux container probe failure")
 	}
 }
+
+func TestReconcileAllUpTransitionsToReady(t *testing.T) {
+	m, power, gpu, docker, health, _, handler := newTestMachineWithRecorder()
+	power.on = true
+	gpu.present = true
+	gpu.name = "NVIDIA GeForce RTX 5060 Ti"
+	docker.running = true
+	health.healthy = true
+
+	if got := m.Reconcile(); !got {
+		t.Fatalf("expected Reconcile to return true, got %v", got)
+	}
+
+	if m.State() != Ready {
+		t.Fatalf("expected Ready, got %v", m.State())
+	}
+	if m.lastError != nil {
+		t.Fatalf("expected no lastError, got %v", m.lastError)
+	}
+	if !handler.hasRecord(slog.LevelInfo, "State -> Ready (startup reconcile)") {
+		t.Fatalf("expected Info log for startup reconcile")
+	}
+}
+
+func TestReconcileStaysOff(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(*fakePower, *fakeGPU, *fakeDocker, *fakeHealth)
+	}{
+		{
+			name: "Shelly off",
+			setup: func(_ *fakePower, gpu *fakeGPU, docker *fakeDocker, health *fakeHealth) {
+				gpu.present = true
+				docker.running = true
+				health.healthy = true
+			},
+		},
+		{
+			name: "GPU not present",
+			setup: func(power *fakePower, _ *fakeGPU, docker *fakeDocker, health *fakeHealth) {
+				power.on = true
+				docker.running = true
+				health.healthy = true
+			},
+		},
+		{
+			name: "Docker not running",
+			setup: func(power *fakePower, gpu *fakeGPU, _ *fakeDocker, health *fakeHealth) {
+				power.on = true
+				gpu.present = true
+				health.healthy = true
+			},
+		},
+		{
+			name: "Health not healthy",
+			setup: func(power *fakePower, gpu *fakeGPU, docker *fakeDocker, _ *fakeHealth) {
+				power.on = true
+				gpu.present = true
+				docker.running = true
+			},
+		},
+		{
+			name: "Shelly error",
+			setup: func(power *fakePower, gpu *fakeGPU, docker *fakeDocker, health *fakeHealth) {
+				power.isOnErr = errors.New("unreachable")
+				power.on = true
+				gpu.present = true
+				docker.running = true
+				health.healthy = true
+			},
+		},
+		{
+			name: "GPU status error",
+			setup: func(power *fakePower, gpu *fakeGPU, docker *fakeDocker, health *fakeHealth) {
+				power.on = true
+				gpu.err = errors.New("nvidia-smi: command not found")
+				docker.running = true
+				health.healthy = true
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, power, gpu, docker, health, _, handler := newTestMachineWithRecorder()
+			tc.setup(power, gpu, docker, health)
+
+			if got := m.Reconcile(); got {
+				t.Fatalf("expected Reconcile to return false, got %v", got)
+			}
+			if m.State() != Off {
+				t.Fatalf("expected Off, got %v", m.State())
+			}
+			if !handler.hasRecord(slog.LevelDebug, "startup reconcile: system not fully up, staying Off") {
+				t.Fatalf("expected Debug log for reconcile staying Off")
+			}
+		})
+	}
+}
+
+func TestReconcileAlreadyReadyNoOp(t *testing.T) {
+	m, _, _, _, _, _ := newTestMachine()
+	m.state = Ready
+
+	if got := m.Reconcile(); got {
+		t.Fatalf("expected Reconcile to return false, got %v", got)
+	}
+	if m.State() != Ready {
+		t.Fatalf("expected Ready, got %v", m.State())
+	}
+}
+
+func TestReconcileStartingConflict(t *testing.T) {
+	m, _, gpu, docker, health, _ := newTestMachine()
+	gpu.present = true
+	health.healthy = true
+
+	// Block docker.Start so the startup transition stays in Starting.
+	docker.block = make(chan struct{})
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	// Wait for state to actually become Starting.
+	for i := 0; i < 100; i++ {
+		if m.State() == Starting {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != Starting {
+		t.Fatalf("expected Starting, got %v", m.State())
+	}
+
+	if got := m.Reconcile(); got {
+		t.Fatalf("expected Reconcile to return false while starting, got %v", got)
+	}
+	if m.State() != Starting {
+		t.Fatalf("expected Starting to remain, got %v", m.State())
+	}
+
+	close(docker.block)
+	m.Wait()
+}
+
+func TestReconcileDoesNotActivateCooldown(t *testing.T) {
+	m, power, gpu, docker, health, _ := newTestMachineWithCooldown(50 * time.Millisecond)
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	health.healthy = true
+
+	if got := m.Reconcile(); !got {
+		t.Fatalf("expected Reconcile to return true, got %v", got)
+	}
+	if m.State() != Ready {
+		t.Fatalf("expected Ready, got %v", m.State())
+	}
+	if !m.lastReadyTime.IsZero() {
+		t.Fatalf("expected lastReadyTime to remain zero after reconcile, got %v", m.lastReadyTime)
+	}
+
+	// Immediate PowerOff should be accepted, not blocked by cooldown.
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+	if m.State() != Off {
+		t.Fatalf("expected Off, got %v", m.State())
+	}
+}
+
+func TestReconcileReadyPowerOnAlreadyInState(t *testing.T) {
+	m, power, gpu, docker, health, _ := newTestMachineWithCooldown(50 * time.Millisecond)
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	health.healthy = true
+
+	if got := m.Reconcile(); !got {
+		t.Fatalf("expected Reconcile to return true, got %v", got)
+	}
+	if m.State() != Ready {
+		t.Fatalf("expected Ready, got %v", m.State())
+	}
+
+	if got := m.PowerOn(); got != ResultAlreadyInState {
+		t.Fatalf("expected ResultAlreadyInState, got %v", got)
+	}
+}

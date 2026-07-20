@@ -59,6 +59,7 @@ func main() {
 	}
 	auxManager := docker.NewManager(auxSpecs)
 	machine.SetAuxContainers(auxManager)
+	machine.Reconcile()
 
 	server := api.NewServer(machine, logger)
 

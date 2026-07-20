@@ -178,6 +178,52 @@ func (m *Machine) SetAuxContainers(ctrl AuxContainerController) {
 	m.aux = ctrl
 }
 
+// Reconcile performs a one-shot startup probe. If the machine is Off and all
+// four dependencies are already up, it transitions directly to Ready without
+// running the full startup sequence and without activating the post-startup
+// cooldown. It returns true when the reconcile transitioned to Ready.
+func (m *Machine) Reconcile() bool {
+	if !m.transitionMu.TryLock() {
+		return false
+	}
+	defer m.transitionMu.Unlock()
+
+	m.stateMu.Lock()
+	if m.state != Off {
+		m.stateMu.Unlock()
+		return false
+	}
+	m.stateMu.Unlock()
+
+	shellyOn := m.probeBool("Shelly", false, func(ctx context.Context) (bool, error) {
+		return m.power.IsOn(ctx)
+	})
+	gpuPresent, _ := m.probeGPU(probeFailureExpected(Off))
+	running := m.probeBool("Docker", false, func(ctx context.Context) (bool, error) {
+		return m.docker.IsRunning(ctx)
+	})
+	healthy, _ := m.probeHealth(probeFailureExpected(Off))
+
+	if shellyOn && gpuPresent && running && healthy {
+		m.stateMu.Lock()
+		m.state = Ready
+		m.lastError = nil
+		close(m.changeCh)
+		m.changeCh = make(chan struct{})
+		m.stateMu.Unlock()
+		m.logger.Info("State -> Ready (startup reconcile)")
+		return true
+	}
+
+	m.logger.Debug("startup reconcile: system not fully up, staying Off",
+		"shellyOn", shellyOn,
+		"gpuPresent", gpuPresent,
+		"llamaSwapRunning", running,
+		"llamaSwapHealthy", healthy,
+	)
+	return false
+}
+
 func (m *Machine) PowerOn() PowerResult {
 	m.stateMu.Lock()
 	current := m.state
