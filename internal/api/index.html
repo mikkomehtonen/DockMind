@@ -798,8 +798,8 @@
         els.gpuProcsUtilBar.hidden = true;
       }
 
-      const auxStartEnabled = (data.state === "Ready") && data.cooldownRemaining <= 0;
-      const auxStopEnabled = (data.state === "Off" || data.state === "Ready") && data.cooldownRemaining <= 0;
+      const auxStartEnabled = (data.state === "Ready");
+      const auxStopEnabled = (data.state === "Off" || data.state === "Ready");
       if (data.auxContainers && data.auxContainers.length > 0) {
         els.auxCard.hidden = false;
         els.auxList.innerHTML = data.auxContainers

@@ -607,10 +607,12 @@ func TestWebUIAuxStartGatedOnReady(t *testing.T) {
 
 	body := rec.Body.String()
 	for _, want := range []string{
-		`const auxStartEnabled = (data.state === "Ready") && data.cooldownRemaining <= 0;`,
-		`const auxStopEnabled = (data.state === "Off" || data.state === "Ready") && data.cooldownRemaining <= 0;`,
+		`const auxStartEnabled = (data.state === "Ready");`,
+		`const auxStopEnabled = (data.state === "Off" || data.state === "Ready");`,
 		`${running || !auxStartEnabled ? "disabled" : ""}`,
 		`${!running || !auxStopEnabled ? "disabled" : ""}`,
+		`Cooldown active`,
+		`cooldownRemaining`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected body to contain %q", want)

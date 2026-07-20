@@ -2458,6 +2458,112 @@ func TestStopAuxContainer(t *testing.T) {
 	}
 }
 
+func TestAuxOperationIgnoresCooldown(t *testing.T) {
+	cases := []struct {
+		name         string
+		state        State
+		cooldown     time.Duration
+		setReadyTime bool
+		setOffTime   bool
+		start        bool
+		want         AuxResult
+		wantStart    bool
+		wantStop     bool
+	}{
+		{
+			name:         "Ready start allowed during post-startup cooldown",
+			state:        Ready,
+			cooldown:     50 * time.Millisecond,
+			setReadyTime: true,
+			start:        true,
+			want:         AuxResultOK,
+			wantStart:    true,
+		},
+		{
+			name:         "Ready stop allowed during post-startup cooldown",
+			state:        Ready,
+			cooldown:     50 * time.Millisecond,
+			setReadyTime: true,
+			start:        false,
+			want:         AuxResultOK,
+			wantStop:     true,
+		},
+		{
+			name:       "Off stop allowed during post-shutdown cooldown",
+			state:      Off,
+			cooldown:   50 * time.Millisecond,
+			setOffTime: true,
+			start:      false,
+			want:       AuxResultOK,
+			wantStop:   true,
+		},
+		{
+			name:       "Off start rejected by state gate during post-shutdown cooldown",
+			state:      Off,
+			cooldown:   50 * time.Millisecond,
+			setOffTime: true,
+			start:      true,
+			want:       AuxResultConflict,
+		},
+		{
+			name:      "Ready start allowed when cooldown disabled",
+			state:     Ready,
+			cooldown:  0,
+			start:     true,
+			want:      AuxResultOK,
+			wantStart: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, _, _, _, _ := newTestMachineWithCooldown(tc.cooldown)
+			aux := &fakeAuxController{
+				names:     []string{"kokoro"},
+				isRunning: map[string]bool{"kokoro": true},
+			}
+			m.SetAuxContainers(aux)
+			m.stateMu.Lock()
+			m.state = tc.state
+			if tc.setReadyTime {
+				m.lastReadyTime = time.Now()
+			}
+			if tc.setOffTime {
+				m.lastOffTime = time.Now()
+			}
+			m.stateMu.Unlock()
+
+			var got AuxResult
+			if tc.start {
+				got = m.StartAuxContainer("kokoro")
+			} else {
+				got = m.StopAuxContainer("kokoro")
+			}
+			if got != tc.want {
+				t.Fatalf("expected %v, got %v", tc.want, got)
+			}
+			if tc.wantStart {
+				if len(aux.startCalls) != 1 || aux.startCalls[0] != "kokoro" {
+					t.Fatalf("expected Start called with %q, got %v", "kokoro", aux.startCalls)
+				}
+			} else {
+				if len(aux.startCalls) != 0 {
+					t.Fatalf("expected Start not called, got %v", aux.startCalls)
+				}
+			}
+			if tc.wantStop {
+				if len(aux.stopCalls) != 1 || aux.stopCalls[0] != "kokoro" {
+					t.Fatalf("expected Stop called with %q, got %v", "kokoro", aux.stopCalls)
+				}
+			} else {
+				if len(aux.stopCalls) != 0 {
+					t.Fatalf("expected Stop not called, got %v", aux.stopCalls)
+				}
+			}
+		})
+	}
+}
+
 func TestStartAuxContainerError(t *testing.T) {
 	m, _, _, _, _, _ := newTestMachine()
 	aux := &fakeAuxController{

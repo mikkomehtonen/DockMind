@@ -115,6 +115,9 @@ started automatically during power-on, but any running aux containers are stoppe
 during the shutdown sequence before the GPU-process check and Shelly power-off.
 Aux containers can be started only when the system is Ready (GPU detected and the
 inference backend healthy), and can be stopped in either the Off or Ready state.
+Aux start/stop is gated by the system state, not by the power cooldown, so aux
+containers can be used immediately after startup even while a post-startup
+cooldown is active.
 
 ```yaml
 auxContainers:
