@@ -61,6 +61,9 @@ func TestProductDoc(t *testing.T) {
 	if !strings.Contains(body, "024-aux-containers-bypass-cooldown") {
 		t.Error("docs/product.md Features list does not reference the 024-aux-containers-bypass-cooldown story")
 	}
+	if !strings.Contains(body, "026-aux-container-disable-autoshutdown") {
+		t.Error("docs/product.md Features list does not reference the 026-aux-container-disable-autoshutdown story")
+	}
 	if strings.Contains(body, "Web UI, Prometheus metrics, or request queuing during startup") {
 		t.Error("docs/product.md still lists Web UI as a non-goal")
 	}

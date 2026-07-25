@@ -708,6 +708,39 @@ auxContainers:
 				if cfg.AuxContainers[1].Name != "whisper" || cfg.AuxContainers[1].Container != "whisper-stt" {
 					t.Errorf("unexpected second aux container: %+v", cfg.AuxContainers[1])
 				}
+				if cfg.AuxContainers[0].DisableIdleShutdown {
+					t.Error("expected DisableIdleShutdown=false by default")
+				}
+				if cfg.AuxContainers[1].DisableIdleShutdown {
+					t.Error("expected DisableIdleShutdown=false by default")
+				}
+			},
+		},
+		{
+			name: "aux with disableIdleShutdown",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+auxContainers:
+  - name: kokoro
+    container: kokoro-tts
+    disableIdleShutdown: true
+  - name: whisper
+    container: whisper-stt
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if len(cfg.AuxContainers) != 2 {
+					t.Fatalf("expected 2 aux containers, got %d", len(cfg.AuxContainers))
+				}
+				if !cfg.AuxContainers[0].DisableIdleShutdown {
+					t.Error("expected kokoro DisableIdleShutdown=true")
+				}
+				if cfg.AuxContainers[1].DisableIdleShutdown {
+					t.Error("expected whisper DisableIdleShutdown=false")
+				}
 			},
 		},
 		{

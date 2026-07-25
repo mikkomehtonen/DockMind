@@ -43,8 +43,9 @@ type DockerConfig struct {
 }
 
 type AuxContainerConfig struct {
-	Name      string `yaml:"name"`
-	Container string `yaml:"container"`
+	Name                string `yaml:"name"`
+	Container           string `yaml:"container"`
+	DisableIdleShutdown bool   `yaml:"disableIdleShutdown"`
 }
 
 type LlamaSwapConfig struct {

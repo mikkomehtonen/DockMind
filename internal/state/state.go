@@ -98,12 +98,14 @@ const (
 )
 
 type AuxContainerStatus struct {
-	Name    string `json:"name"`
-	Running bool   `json:"running"`
+	Name                string `json:"name"`
+	Running             bool   `json:"running"`
+	DisableIdleShutdown bool   `json:"disableIdleShutdown,omitempty"`
 }
 
 type AuxContainerController interface {
 	Names() []string
+	IdleBlockingNames() []string
 	Start(ctx context.Context, name string) error
 	Stop(ctx context.Context, name string) error
 	IsRunning(ctx context.Context, name string) (bool, error)
@@ -111,19 +113,20 @@ type AuxContainerController interface {
 }
 
 type StatusResponse struct {
-	State             string               `json:"state"`
-	GPUPresent        bool                 `json:"gpuPresent"`
-	GPUName           string               `json:"gpuName"`
-	ShellyOn          bool                 `json:"shellyOn"`
-	LlamaSwapRunning  bool                 `json:"llamaSwapRunning"`
-	LlamaSwapHealthy  bool                 `json:"llamaSwapHealthy"`
-	LoadedModels      []string             `json:"loadedModels"`
-	GPUProcesses      []GPUProcess         `json:"gpuProcesses"`
-	GPUMemory         GPUMemory            `json:"gpuMemory"`
-	LastError         *string              `json:"lastError"`
-	CooldownRemaining float64              `json:"cooldownRemaining"`
-	IdleRemaining     float64              `json:"idleRemaining"`
-	AuxContainers     []AuxContainerStatus `json:"auxContainers"`
+	State               string               `json:"state"`
+	GPUPresent          bool                 `json:"gpuPresent"`
+	GPUName             string               `json:"gpuName"`
+	ShellyOn            bool                 `json:"shellyOn"`
+	LlamaSwapRunning    bool                 `json:"llamaSwapRunning"`
+	LlamaSwapHealthy    bool                 `json:"llamaSwapHealthy"`
+	LoadedModels        []string             `json:"loadedModels"`
+	GPUProcesses        []GPUProcess         `json:"gpuProcesses"`
+	GPUMemory           GPUMemory            `json:"gpuMemory"`
+	LastError           *string              `json:"lastError"`
+	CooldownRemaining   float64              `json:"cooldownRemaining"`
+	IdleRemaining       float64              `json:"idleRemaining"`
+	IdleShutdownBlocked bool                 `json:"idleShutdownBlocked"`
+	AuxContainers       []AuxContainerStatus `json:"auxContainers"`
 }
 
 type Machine struct {
@@ -400,6 +403,7 @@ func (m *Machine) Status() StatusResponse {
 		GPUMemory:         gpuMemory,
 		LastError:         lastError,
 		CooldownRemaining: cooldownRemaining,
+		IdleRemaining:     0,
 		AuxContainers:     auxStatuses,
 	}
 }
@@ -407,6 +411,11 @@ func (m *Machine) Status() StatusResponse {
 func (m *Machine) probeAuxContainers() []AuxContainerStatus {
 	if m.aux == nil {
 		return []AuxContainerStatus{}
+	}
+
+	blockingNames := make(map[string]struct{})
+	for _, n := range m.aux.IdleBlockingNames() {
+		blockingNames[n] = struct{}{}
 	}
 
 	var statuses []AuxContainerStatus
@@ -418,9 +427,36 @@ func (m *Machine) probeAuxContainers() []AuxContainerStatus {
 			m.logger.Warn("Aux container status probe failed", "name", name, "error", err)
 			running = false
 		}
-		statuses = append(statuses, AuxContainerStatus{Name: name, Running: running})
+		_, disableIdle := blockingNames[name]
+		statuses = append(statuses, AuxContainerStatus{
+			Name:                name,
+			Running:             running,
+			DisableIdleShutdown: disableIdle,
+		})
 	}
 	return statuses
+}
+
+// IdleShutdownBlocked reports whether any aux container configured with
+// DisableIdleShutdown is currently running. When true, the gateway should
+// suppress idle auto-shutdown.
+func (m *Machine) IdleShutdownBlocked() bool {
+	if m.aux == nil {
+		return false
+	}
+	for _, name := range m.aux.IdleBlockingNames() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		running, err := m.aux.IsRunning(ctx, name)
+		cancel()
+		if err != nil {
+			m.logger.Debug("aux idle probe failed", "name", name, "error", err)
+			continue
+		}
+		if running {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Machine) StartAuxContainer(name string) AuxResult {

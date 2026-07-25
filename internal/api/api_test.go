@@ -22,11 +22,16 @@ type fakeStateMachine struct {
 }
 
 type fakeIdleReporter struct {
-	value float64
+	value               float64
+	idleShutdownBlocked bool
 }
 
 func (f *fakeIdleReporter) IdleRemaining() float64 {
 	return f.value
+}
+
+func (f *fakeIdleReporter) IdleShutdownBlocked() bool {
+	return f.idleShutdownBlocked
 }
 
 func (f *fakeStateMachine) Status() state.StatusResponse {
@@ -425,7 +430,7 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected components.schemas.StatusResponse.properties to be an object")
 		}
-		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "gpuProcesses", "gpuMemory", "lastError", "cooldownRemaining", "idleRemaining", "auxContainers"} {
+		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "gpuProcesses", "gpuMemory", "lastError", "cooldownRemaining", "idleRemaining", "idleShutdownBlocked", "auxContainers"} {
 			if _, ok := properties[field]; !ok {
 				t.Fatalf("expected StatusResponse properties to contain %q", field)
 			}
@@ -446,6 +451,24 @@ func TestSwaggerRoutes(t *testing.T) {
 		for _, field := range []string{"pid", "name", "usedGpuMemory"} {
 			if _, ok := gpuProps[field]; !ok {
 				t.Fatalf("expected gpuProcesses.items.properties to contain %q", field)
+			}
+		}
+
+		auxContainers, ok := properties["auxContainers"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected auxContainers to be an object")
+		}
+		auxItems, ok := auxContainers["items"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected auxContainers.items to be an object")
+		}
+		auxProps, ok := auxItems["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected auxContainers.items.properties to be an object")
+		}
+		for _, field := range []string{"name", "running", "disableIdleShutdown"} {
+			if _, ok := auxProps[field]; !ok {
+				t.Fatalf("expected auxContainers.items.properties to contain %q", field)
 			}
 		}
 
@@ -635,6 +658,35 @@ func TestWebUIAuxStartFeedbackMessage(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected body to contain %q", want)
 		}
+	}
+}
+
+func TestWebUIAuxIdleShutdownBlocking(t *testing.T) {
+	server := NewServer(&fakeStateMachine{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`data.idleShutdownBlocked`,
+		`Auto-shutdown paused`,
+		`pauses auto-shutdown`,
+		`aux__badge`,
+		`disableIdleShutdown`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected body to contain %q", want)
+		}
+	}
+	// Verify paused indicator branch precedes idleRemaining countdown branch.
+	pausedIdx := strings.Index(body, `data.idleShutdownBlocked`)
+	idleIdx := strings.Index(body, `data.idleRemaining`)
+	if pausedIdx == -1 || idleIdx == -1 {
+		t.Fatalf("expected both idleShutdownBlocked and idleRemaining in body")
+	}
+	if pausedIdx > idleIdx {
+		t.Fatalf("expected paused indicator to precede idle countdown")
 	}
 }
 
@@ -955,6 +1007,9 @@ func TestIdleReporter(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), `"idleRemaining":0`) {
 			t.Fatalf("expected body to contain \"idleRemaining\":0, got %q", rec.Body.String())
 		}
+		if !strings.Contains(rec.Body.String(), `"idleShutdownBlocked":false`) {
+			t.Fatalf("expected body to contain \"idleShutdownBlocked\":false, got %q", rec.Body.String())
+		}
 	})
 
 	t.Run("reporter value is merged", func(t *testing.T) {
@@ -988,6 +1043,42 @@ func TestIdleReporter(t *testing.T) {
 		}
 		if !strings.Contains(rec.Body.String(), `"idleRemaining":0`) {
 			t.Fatalf("expected body to contain \"idleRemaining\":0, got %q", rec.Body.String())
+		}
+	})
+
+	t.Run("reporter idleShutdownBlocked is merged", func(t *testing.T) {
+		fake := &fakeStateMachine{status: state.StatusResponse{State: "Ready"}}
+		server := NewServer(fake, nil)
+		server.SetIdleReporter(&fakeIdleReporter{value: 30.0, idleShutdownBlocked: true})
+
+		req := httptest.NewRequest(http.MethodGet, "/status", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, `"idleShutdownBlocked":true`) {
+			t.Fatalf("expected body to contain \"idleShutdownBlocked\":true, got %q", body)
+		}
+	})
+
+	t.Run("reporter idleShutdownBlocked false is merged", func(t *testing.T) {
+		fake := &fakeStateMachine{status: state.StatusResponse{State: "Ready"}}
+		server := NewServer(fake, nil)
+		server.SetIdleReporter(&fakeIdleReporter{value: 30.0, idleShutdownBlocked: false})
+
+		req := httptest.NewRequest(http.MethodGet, "/status", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, `"idleShutdownBlocked":false`) {
+			t.Fatalf("expected body to contain \"idleShutdownBlocked\":false, got %q", body)
 		}
 	})
 }

@@ -57,23 +57,29 @@ func (c *Client) IsRunning(ctx context.Context) (bool, error) {
 }
 
 type ContainerSpec struct {
-	Name      string
-	Container string
+	Name                string
+	Container           string
+	DisableIdleShutdown bool
 }
 
 type Manager struct {
-	specs []ContainerSpec
-	ctrls map[string]*Client
+	specs             []ContainerSpec
+	ctrls             map[string]*Client
+	idleBlockingNames []string
 }
 
 func NewManager(specs []ContainerSpec) *Manager {
 	m := &Manager{
-		specs: make([]ContainerSpec, 0, len(specs)),
-		ctrls: make(map[string]*Client, len(specs)),
+		specs:             make([]ContainerSpec, 0, len(specs)),
+		ctrls:             make(map[string]*Client, len(specs)),
+		idleBlockingNames: make([]string, 0),
 	}
 	for _, spec := range specs {
 		m.specs = append(m.specs, spec)
 		m.ctrls[spec.Name] = New(spec.Container)
+		if spec.DisableIdleShutdown {
+			m.idleBlockingNames = append(m.idleBlockingNames, spec.Name)
+		}
 	}
 	return m
 }
@@ -92,6 +98,14 @@ func (m *Manager) Names() []string {
 		names[i] = spec.Name
 	}
 	return names
+}
+
+// IdleBlockingNames returns the names of containers configured with
+// DisableIdleShutdown. These containers suppress idle auto-shutdown when running.
+func (m *Manager) IdleBlockingNames() []string {
+	out := make([]string, len(m.idleBlockingNames))
+	copy(out, m.idleBlockingNames)
+	return out
 }
 
 func (m *Manager) Start(ctx context.Context, name string) error {

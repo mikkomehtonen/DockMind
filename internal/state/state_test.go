@@ -233,6 +233,7 @@ type fakeAuxController struct {
 	stopErr      error
 	stopAllErr   error
 	isRunningErr error
+	idleBlocking []string
 }
 
 func (f *fakeAuxController) Names() []string {
@@ -290,6 +291,10 @@ func (f *fakeAuxController) StopAll(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (f *fakeAuxController) IdleBlockingNames() []string {
+	return f.idleBlocking
 }
 
 func newTestMachine() (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth, *fakeUnbinder) {
@@ -2806,6 +2811,10 @@ func TestStatusAuxContainersNil(t *testing.T) {
 	if len(status.AuxContainers) != 0 {
 		t.Fatalf("expected empty AuxContainers, got %v", status.AuxContainers)
 	}
+	// AC 3.4: nil aux controller → IdleShutdownBlocked is false (default)
+	if status.IdleShutdownBlocked {
+		t.Fatal("expected IdleShutdownBlocked false with nil aux controller")
+	}
 
 	data, err := json.Marshal(status)
 	if err != nil {
@@ -2835,6 +2844,150 @@ func TestStatusAuxContainersProbeError(t *testing.T) {
 	}
 	if !handler.hasRecord(slog.LevelWarn, "Aux container status probe failed") {
 		t.Fatalf("expected WARN log for aux container probe failure")
+	}
+}
+
+func TestIdleShutdownBlocked(t *testing.T) {
+	cases := []struct {
+		name   string
+		nilAux bool
+		aux    func() *fakeAuxController
+		want   bool
+	}{
+		{
+			name: "one blocking container running",
+			aux: func() *fakeAuxController {
+				return &fakeAuxController{
+					names:        []string{"kokoro", "whisper"},
+					isRunning:    map[string]bool{"kokoro": true, "whisper": false},
+					idleBlocking: []string{"kokoro"},
+				}
+			},
+			want: true,
+		},
+		{
+			name: "blocking container stopped",
+			aux: func() *fakeAuxController {
+				return &fakeAuxController{
+					names:        []string{"kokoro", "whisper"},
+					isRunning:    map[string]bool{"kokoro": false, "whisper": false},
+					idleBlocking: []string{"kokoro"},
+				}
+			},
+			want: false,
+		},
+		{
+			name: "two blocking containers one running",
+			aux: func() *fakeAuxController {
+				return &fakeAuxController{
+					names:        []string{"kokoro", "whisper"},
+					isRunning:    map[string]bool{"kokoro": true, "whisper": false},
+					idleBlocking: []string{"kokoro", "whisper"},
+				}
+			},
+			want: true,
+		},
+		{
+			name: "empty blocking list",
+			aux: func() *fakeAuxController {
+				return &fakeAuxController{
+					names:        []string{"kokoro", "whisper"},
+					isRunning:    map[string]bool{"kokoro": true, "whisper": true},
+					idleBlocking: []string{},
+				}
+			},
+			want: false,
+		},
+		{
+			name:   "nil aux controller",
+			nilAux: true,
+			want:   false,
+		},
+		{
+			name: "probe error defaults to false",
+			aux: func() *fakeAuxController {
+				return &fakeAuxController{
+					names:        []string{"kokoro"},
+					isRunning:    map[string]bool{"kokoro": true},
+					isRunningErr: errors.New("docker unreachable"),
+					idleBlocking: []string{"kokoro"},
+				}
+			},
+			want: false,
+		},
+		{
+			name: "non-blocking container running",
+			aux: func() *fakeAuxController {
+				return &fakeAuxController{
+					names:        []string{"kokoro", "whisper"},
+					isRunning:    map[string]bool{"kokoro": false, "whisper": true},
+					idleBlocking: []string{"kokoro"},
+				}
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, _, _, _, _, _ := newTestMachineWithRecorder()
+			if !tc.nilAux && tc.aux != nil {
+				m.SetAuxContainers(tc.aux())
+			}
+
+			if got := m.IdleShutdownBlocked(); got != tc.want {
+				t.Fatalf("expected IdleShutdownBlocked=%v, got %v", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestIdleShutdownBlocked_ProbeErrorLogged(t *testing.T) {
+	// AC 2.7: probe failure logged at DEBUG level.
+	m, _, _, _, _, _, handler := newTestMachineWithRecorder()
+	aux := &fakeAuxController{
+		names:        []string{"kokoro"},
+		isRunning:    map[string]bool{"kokoro": true},
+		isRunningErr: errors.New("docker unreachable"),
+		idleBlocking: []string{"kokoro"},
+	}
+	m.SetAuxContainers(aux)
+
+	got := m.IdleShutdownBlocked()
+	if got {
+		t.Fatal("expected IdleShutdownBlocked false on probe error")
+	}
+	if !handler.hasRecord(slog.LevelDebug, "aux idle probe failed") {
+		t.Fatal("expected DEBUG log for aux idle probe failure")
+	}
+}
+
+func TestStatusAuxDisableIdleShutdown(t *testing.T) {
+	m, _, _, _, _, _, _ := newTestMachineWithRecorder()
+	aux := &fakeAuxController{
+		names:        []string{"kokoro", "whisper"},
+		isRunning:    map[string]bool{"kokoro": true, "whisper": false},
+		idleBlocking: []string{"kokoro"},
+	}
+	m.SetAuxContainers(aux)
+	m.state = Ready
+
+	status := m.Status()
+	if len(status.AuxContainers) != 2 {
+		t.Fatalf("expected 2 aux containers, got %d", len(status.AuxContainers))
+	}
+	// kokoro should have DisableIdleShutdown=true
+	if !status.AuxContainers[0].DisableIdleShutdown {
+		t.Fatalf("expected kokoro disableIdleShutdown=true")
+	}
+	// whisper should have DisableIdleShutdown=false
+	if status.AuxContainers[1].DisableIdleShutdown {
+		t.Fatalf("expected whisper disableIdleShutdown=false")
+	}
+	// IdleShutdownBlocked is NOT set by Status() — it defaults to false and is
+	// populated by the API handler from the idle reporter.
+	if status.IdleShutdownBlocked {
+		t.Fatalf("expected IdleShutdownBlocked=false from Status() (set by API handler, not Status)")
 	}
 }
 

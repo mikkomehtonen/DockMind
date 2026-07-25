@@ -27,6 +27,7 @@ type StateController interface {
 	State() state.State
 	PowerOff() state.PowerResult
 	EnsureReady(ctx context.Context) error
+	IdleShutdownBlocked() bool
 }
 
 // modelCache holds a cached copy of the /v1/models response.
@@ -111,6 +112,9 @@ type Gateway struct {
 	lastActivity    time.Time
 	pendingShutdown bool
 
+	// idleBlocked is set when aux containers with DisableIdleShutdown are running.
+	idleBlocked atomic.Bool
+
 	// Idle watcher lifecycle.
 	idleCtx    context.Context
 	idleCancel context.CancelFunc
@@ -176,10 +180,14 @@ func (g *Gateway) InitModelsCache(dir string) {
 }
 
 // IdleRemaining returns the number of seconds before an idle auto-shutdown,
-// or 0 when no shutdown is pending. It is safe to call concurrently with the
-// idle watcher and request handlers.
+// or 0 when no shutdown is pending or when idle shutdown is blocked by aux
+// containers. It is safe to call concurrently with the idle watcher and
+// request handlers.
 func (g *Gateway) IdleRemaining() float64 {
 	if g.idleTimeout <= 0 {
+		return 0
+	}
+	if g.idleBlocked.Load() {
 		return 0
 	}
 	if g.machine.State() != state.Ready {
@@ -198,6 +206,19 @@ func (g *Gateway) IdleRemaining() float64 {
 		return 0
 	}
 	return remaining.Seconds()
+}
+
+// IdleShutdownBlocked returns whether idle auto-shutdown is currently
+// suppressed by running aux containers with DisableIdleShutdown.
+// Returns false when idleTimeout is 0 or the machine is not Ready.
+func (g *Gateway) IdleShutdownBlocked() bool {
+	if g.idleTimeout <= 0 {
+		return false
+	}
+	if g.machine.State() != state.Ready {
+		return false
+	}
+	return g.idleBlocked.Load()
 }
 
 // StartIdleWatcher starts the background idle shutdown goroutine.
@@ -322,6 +343,7 @@ func (g *Gateway) tick(prevReady bool) {
 		g.lastActivity = time.Now()
 		g.pendingShutdown = false
 		g.activeMu.Unlock()
+		g.idleBlocked.Store(false)
 		return
 	}
 
@@ -331,7 +353,32 @@ func (g *Gateway) tick(prevReady bool) {
 		g.activeMu.Unlock()
 		return
 	}
+	g.activeMu.Unlock()
 
+	// Check if idle shutdown is blocked by aux containers.
+	isBlocked := g.machine.IdleShutdownBlocked()
+	wasBlocked := g.idleBlocked.Load()
+	if isBlocked {
+		g.idleBlocked.Store(true)
+		// Cancel any pending shutdown and reset activity timer.
+		g.activeMu.Lock()
+		g.pendingShutdown = false
+		g.lastActivity = time.Now()
+		g.activeMu.Unlock()
+		if !wasBlocked {
+			g.logger.Info("idle shutdown blocked by aux container")
+		}
+		return
+	}
+	if wasBlocked {
+		g.idleBlocked.Store(false)
+		g.activeMu.Lock()
+		g.lastActivity = time.Now()
+		g.activeMu.Unlock()
+		g.logger.Info("idle shutdown unblocked, aux containers stopped")
+	}
+
+	g.activeMu.Lock()
 	idle := time.Since(g.lastActivity)
 	pending := g.pendingShutdown
 	g.activeMu.Unlock()

@@ -29,6 +29,7 @@ type fakeController struct {
 	ensureReadyErr   error // nil = success
 	ensureReadyCalls int
 	autoStart        bool // when true, EnsureReady transitions Off→Ready
+	idleBlocked      atomic.Bool
 }
 
 func newFakeController() *fakeController {
@@ -100,6 +101,10 @@ func (f *fakeController) EnsureReady(ctx context.Context) error {
 			return errors.New("backend in error state")
 		}
 	}
+}
+
+func (f *fakeController) IdleShutdownBlocked() bool {
+	return f.idleBlocked.Load()
 }
 
 func TestReverseProxy(t *testing.T) {
@@ -2162,5 +2167,319 @@ func TestEnsureReady_AwaitingGPUFreeWaitsForSignal(t *testing.T) {
 
 	if err := <-done; err != nil {
 		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestIdleRemaining_ZeroWhenBlocked(t *testing.T) {
+	ctrl := newFakeController()
+
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:9999", 30*time.Second, 100*time.Millisecond, 100*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now()
+	gw.activeMu.Unlock()
+	gw.idleBlocked.Store(true)
+
+	if got := gw.IdleRemaining(); got != 0 {
+		t.Errorf("expected 0 when blocked, got %v", got)
+	}
+}
+
+func TestIdleShutdown_PreventedWhenBlocked(t *testing.T) {
+	ctrl := newFakeController()
+	ctrl.idleBlocked.Store(true)
+
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.StartIdleWatcher(context.Background())
+	defer gw.StopIdleWatcher()
+
+	// Set lastActivity far enough in the past to trigger idle timeout.
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now().Add(-100 * time.Millisecond)
+	gw.activeMu.Unlock()
+
+	// Wait for multiple tick intervals (idleTimeout is 50ms, pollInterval is 10ms).
+	time.Sleep(150 * time.Millisecond)
+
+	ctrl.mu.Lock()
+	calls := ctrl.powerOffCalls
+	ctrl.mu.Unlock()
+	if calls > 0 {
+		t.Errorf("expected PowerOff NOT called when blocked, got %d calls", calls)
+	}
+}
+
+func TestIdleShutdown_ResumeWhenUnblocked(t *testing.T) {
+	ctrl := newFakeController()
+	ctrl.idleBlocked.Store(true) // Start blocked
+
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.StartIdleWatcher(context.Background())
+	defer gw.StopIdleWatcher()
+
+	// Set lastActivity far enough in the past to trigger idle timeout.
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now().Add(-100 * time.Millisecond)
+	gw.activeMu.Unlock()
+
+	// Wait a bit while blocked — shutdown should not happen.
+	time.Sleep(80 * time.Millisecond)
+
+	ctrl.mu.Lock()
+	callsBefore := ctrl.powerOffCalls
+	ctrl.mu.Unlock()
+	if callsBefore > 0 {
+		t.Errorf("expected no PowerOff while blocked, got %d", callsBefore)
+	}
+
+	// Unblock — allow shutdown to proceed.
+	ctrl.idleBlocked.Store(false)
+
+	// Wait for the unblock tick to fire (resets lastActivity).
+	time.Sleep(20 * time.Millisecond)
+
+	// Reset lastActivity past idleTimeout so shutdown fires on next idle check.
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now().Add(-100 * time.Millisecond)
+	gw.activeMu.Unlock()
+
+	// Wait for idle shutdown (idleTimeout 50ms + grace period tick 10ms).
+	time.Sleep(100 * time.Millisecond)
+
+	ctrl.mu.Lock()
+	callsAfter := ctrl.powerOffCalls
+	ctrl.mu.Unlock()
+	if callsAfter == 0 {
+		t.Error("expected PowerOff called after unblocking")
+	}
+}
+
+func TestIdleShutdownBlocked_ReturnsTrueWhenBlocked(t *testing.T) {
+	ctrl := newFakeController()
+
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:9999", 30*time.Second, 100*time.Millisecond, 100*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.idleBlocked.Store(true)
+
+	if !gw.IdleShutdownBlocked() {
+		t.Error("expected IdleShutdownBlocked to return true")
+	}
+}
+
+func TestIdleShutdownBlocked_ReturnsFalseWhenNotBlocked(t *testing.T) {
+	ctrl := newFakeController()
+
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:9999", 30*time.Second, 100*time.Millisecond, 100*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	if gw.IdleShutdownBlocked() {
+		t.Error("expected IdleShutdownBlocked to return false")
+	}
+}
+
+func TestIdleShutdown_ResetLastActivityWhenBlocked(t *testing.T) {
+	// AC 2: lastActivity reset to ~now when blocked.
+	ctrl := newFakeController()
+	ctrl.idleBlocked.Store(true)
+
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.StartIdleWatcher(context.Background())
+	defer gw.StopIdleWatcher()
+
+	// Set lastActivity far in the past.
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now().Add(-200 * time.Millisecond)
+	gw.activeMu.Unlock()
+
+	// Wait for tick to detect blocked and reset lastActivity.
+	time.Sleep(30 * time.Millisecond)
+
+	gw.activeMu.Lock()
+	resetTime := gw.lastActivity
+	gw.activeMu.Unlock()
+
+	if time.Since(resetTime) > 30*time.Millisecond {
+		t.Errorf("expected lastActivity reset to ~now, was %v ago", time.Since(resetTime))
+	}
+}
+
+func TestIdleShutdown_PendingShutdownClearedWhenBlocked(t *testing.T) {
+	// AC 3: pendingShutdown is false when blocked.
+	// AC 4: pendingShutdown pre-set to true → cleared to false.
+	ctrl := newFakeController()
+
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.StartIdleWatcher(context.Background())
+	defer gw.StopIdleWatcher()
+
+	// Pre-set pendingShutdown and lastActivity.
+	gw.activeMu.Lock()
+	gw.pendingShutdown = true
+	gw.lastActivity = time.Now().Add(-100 * time.Millisecond)
+	gw.activeMu.Unlock()
+
+	// Start blocked — should clear pendingShutdown and not call PowerOff.
+	ctrl.idleBlocked.Store(true)
+
+	// Wait for tick to fire.
+	time.Sleep(30 * time.Millisecond)
+
+	gw.activeMu.Lock()
+	pending := gw.pendingShutdown
+	gw.activeMu.Unlock()
+	if pending {
+		t.Error("expected pendingShutdown cleared to false when blocked")
+	}
+
+	ctrl.mu.Lock()
+	calls := ctrl.powerOffCalls
+	ctrl.mu.Unlock()
+	if calls > 0 {
+		t.Errorf("expected PowerOff NOT called when blocked, got %d", calls)
+	}
+}
+
+func TestIdleRemaining_PositiveAfterUnblock(t *testing.T) {
+	// AC 7: IdleRemaining returns positive after blocking container stops.
+	ctrl := newFakeController()
+
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 100*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	// Blocked → IdleRemaining should be 0.
+	gw.idleBlocked.Store(true)
+	if got := gw.IdleRemaining(); got != 0 {
+		t.Errorf("expected 0 when blocked, got %v", got)
+	}
+
+	// Unblock.
+	gw.idleBlocked.Store(false)
+
+	// Recent lastActivity → positive remaining.
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now()
+	gw.activeMu.Unlock()
+
+	remaining := gw.IdleRemaining()
+	if remaining <= 0 {
+		t.Errorf("expected positive remaining after unblock, got %v", remaining)
+	}
+}
+
+func TestIdleShutdownBlocked_ReturnsFalseWhenOff(t *testing.T) {
+	// AC 9: machine Off, blocking container running → returns false.
+	ctrl := newFakeController()
+	ctrl.setState(state.Off, nil)
+
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:9999", 30*time.Second, 100*time.Millisecond, 100*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.idleBlocked.Store(true)
+
+	if gw.IdleShutdownBlocked() {
+		t.Error("expected IdleShutdownBlocked false when machine is Off")
+	}
+}
+
+func TestIdleShutdownBlocked_ReturnsFalseWhenNoTimeout(t *testing.T) {
+	// AC 10: idleTimeout=0, blocking container running → returns false.
+	ctrl := newFakeController()
+
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:9999", 0, 100*time.Millisecond, 100*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.idleBlocked.Store(true)
+
+	if gw.IdleShutdownBlocked() {
+		t.Error("expected IdleShutdownBlocked false when idleTimeout is 0")
+	}
+}
+
+func TestIdleShutdownBlocked_ReturnsFalseAfterUnblock(t *testing.T) {
+	// AC 12: IdleShutdownBlocked returns false after unblock tick.
+	ctrl := newFakeController()
+	ctrl.idleBlocked.Store(true)
+
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.StartIdleWatcher(context.Background())
+	defer gw.StopIdleWatcher()
+
+	// Wait for tick to detect blocked state (pollInterval is 10ms).
+	time.Sleep(50 * time.Millisecond)
+
+	if !gw.IdleShutdownBlocked() {
+		t.Error("expected IdleShutdownBlocked true while blocked")
+	}
+
+	// Unblock.
+	ctrl.idleBlocked.Store(false)
+
+	// Wait for tick to detect unblocked.
+	time.Sleep(50 * time.Millisecond)
+
+	if gw.IdleShutdownBlocked() {
+		t.Error("expected IdleShutdownBlocked false after unblock")
 	}
 }

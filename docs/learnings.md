@@ -102,4 +102,10 @@
 **What happened**: In story 023, `TestStatusGPUMemoryProbedWhenGPUPresent` was added to verify GPU memory probing when the GPU is present. It re-covered four scenarios already tested by `TestStatusIncludesGPUProcesses` (Ready with processes, Ready with no processes, Off with GPU absent, AwaitingGPUFree) and `TestStatusGPUMemoryProbeFailure` (memory probe error). The code reviewer flagged this as a non-blocking simplicity issue because future changes would need updates in two places.
 **Takeaway**: Before adding a new test function, check whether the existing table-driven tests can absorb the new assertions. Extend the existing table with extra fields (e.g., `wantLog`, `wantUtilization`) rather than creating a parallel test that repeats the same scenarios. Add a separate test function only when the assertions genuinely do not fit the existing structure.
 
+## Release mutex before calling slow probe functions in tick loops
+**Date**: 2026-07-25
+**Area**: concurrency / gateway
+**What happened**: In story 026, restructuring `Gateway.tick()` to gate the blocked-check behind the active-check caused a deadlock. The active-check acquired `activeMu` and then called `g.machine.IdleShutdownBlocked()` (which does live docker probes) while still holding the lock. Tests that tried to acquire `activeMu` to set `lastActivity` deadlocked because the tick held the lock across the slow probe. Additionally, the idle-check after the probe read `g.lastActivity` and `g.pendingShutdown` without re-acquiring the lock, then called `g.activeMu.Unlock()` which panicked.
+**Takeaway**: When restructuring a tick loop that calls a potentially-slow probe (docker inspect, HTTP request, subprocess), release the mutex before the probe and re-acquire it before reading/writing the protected state. Trace every lock acquisition and release path after restructuring — a missing `Lock()` before a read or a stray `Unlock()` without a matching `Lock()` will deadlock or panic.
+
 

@@ -11,6 +11,7 @@ DockMind is a lightweight daemon that manages the lifecycle of an AI inference s
 - **GPU Monitoring** — detects GPU availability and name via `nvidia-smi`.
 - **Health Monitoring** — checks `llama-swap` readiness through its `/running` endpoint and reports the currently loaded model name(s) in status and the web UI.
 - **OpenAI-Compatible Gateway** — opt-in reverse proxy that forwards OpenAI SDK requests to the backend, with auto-startup on first request and idle shutdown to save power. Cached model list is served when the backend is off.
+- **Idle Shutdown Suppression** — aux containers with `disableIdleShutdown: true` suppress the gateway idle timer while running, allowing GPU-direct workloads to keep the system on.
 
 See [docs/product.md](docs/product.md) for the full feature list and non-goals.
 
@@ -123,6 +124,7 @@ cooldown is active.
 auxContainers:
   - name: kokoro
     container: kokoro-tts
+    disableIdleShutdown: true
   - name: whisper
     container: whisper-stt
 ```
@@ -131,6 +133,13 @@ Each entry needs a display `name` (used in `/status`, the web UI, and the API
 path) and a `container` (the actual Docker container name passed to `docker
 start`/`stop`). Names must be unique. When no aux containers are configured,
 `GET /status` returns `"auxContainers": []`.
+
+When the gateway idle shutdown is enabled, set `disableIdleShutdown: true` on
+an aux container to suppress the idle auto-shutdown timer while that container
+is running. This is useful for GPU-direct workloads (e.g. training, TTS
+generation) that bypass the gateway inference proxy and would otherwise trigger
+an idle shutdown. When suppressed, `GET /status` reports
+`"idleShutdownBlocked": true` and `idleRemaining` is always `0`.
 
 ### Gateway Configuration
 
@@ -200,7 +209,18 @@ shows an auto-shutdown countdown. The countdown is hidden when the state is not
   "lastError": null,
   "cooldownRemaining": 0,
   "idleRemaining": 0,
-  "auxContainers": []
+  "idleShutdownBlocked": false,
+  "auxContainers": [
+    {
+      "name": "kokoro",
+      "running": false,
+      "disableIdleShutdown": true
+    },
+    {
+      "name": "whisper",
+      "running": false
+    }
+  ]
 }
 ```
 

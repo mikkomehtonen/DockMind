@@ -264,13 +264,18 @@
             "type": "number",
             "description": "Remaining seconds before an idle auto-shutdown. 0 when the gateway is disabled, idleTimeout is 0, the state is not Ready, or a request is in flight."
           },
+          "idleShutdownBlocked": {
+            "type": "boolean",
+            "description": "True when a running aux container with disableIdleShutdown suppresses the idle auto-shutdown timer. When true, idleRemaining is always 0."
+          },
           "auxContainers": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
                 "name": { "type": "string" },
-                "running": { "type": "boolean" }
+                "running": { "type": "boolean" },
+                "disableIdleShutdown": { "type": "boolean", "description": "True when this container suppresses idle auto-shutdown while running. Omitted when false." }
               }
             },
             "description": "Status of optional aux containers. Empty array when none are configured."

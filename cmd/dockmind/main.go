@@ -55,7 +55,11 @@ func main() {
 
 	auxSpecs := make([]docker.ContainerSpec, len(cfg.AuxContainers))
 	for i, aux := range cfg.AuxContainers {
-		auxSpecs[i] = docker.ContainerSpec{Name: aux.Name, Container: aux.Container}
+		auxSpecs[i] = docker.ContainerSpec{
+			Name:                aux.Name,
+			Container:           aux.Container,
+			DisableIdleShutdown: aux.DisableIdleShutdown,
+		}
 	}
 	auxManager := docker.NewManager(auxSpecs)
 	machine.SetAuxContainers(auxManager)

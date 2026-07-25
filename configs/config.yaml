@@ -20,6 +20,7 @@ power:
 # auxContainers:
 #   - name: kokoro
 #     container: kokoro-tts
+#     disableIdleShutdown: true
 #   - name: whisper
 #     container: whisper-stt
 gateway:

@@ -37,6 +37,7 @@ type StateMachine interface {
 // Implementations return 0 when no shutdown is pending.
 type IdleReporter interface {
 	IdleRemaining() float64
+	IdleShutdownBlocked() bool
 }
 
 type Server struct {
@@ -107,6 +108,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	status := s.machine.Status()
 	if s.idleReporter != nil {
 		status.IdleRemaining = s.idleReporter.IdleRemaining()
+		status.IdleShutdownBlocked = s.idleReporter.IdleShutdownBlocked()
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

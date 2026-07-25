@@ -386,3 +386,43 @@ func TestManagerIsRunningNoSuchContainer(t *testing.T) {
 		t.Fatalf("expected false")
 	}
 }
+
+func TestManagerIdleBlockingNames(t *testing.T) {
+	m, _ := newTestManager([]ContainerSpec{
+		{Name: "kokoro", Container: "kokoro-tts", DisableIdleShutdown: true},
+		{Name: "whisper", Container: "whisper-stt"},
+		{Name: "training", Container: "training-runner", DisableIdleShutdown: true},
+	})
+
+	names := m.IdleBlockingNames()
+	if !reflect.DeepEqual(names, []string{"kokoro", "training"}) {
+		t.Fatalf("expected [kokoro training], got %v", names)
+	}
+}
+
+func TestManagerIdleBlockingNamesNone(t *testing.T) {
+	m, _ := newTestManager([]ContainerSpec{
+		{Name: "kokoro", Container: "kokoro-tts"},
+		{Name: "whisper", Container: "whisper-stt"},
+	})
+
+	names := m.IdleBlockingNames()
+	if names == nil {
+		t.Fatalf("expected non-nil empty slice")
+	}
+	if len(names) != 0 {
+		t.Fatalf("expected empty, got %v", names)
+	}
+}
+
+func TestManagerIdleBlockingNamesZeroSpecs(t *testing.T) {
+	m, _ := newTestManager(nil)
+
+	names := m.IdleBlockingNames()
+	if names == nil {
+		t.Fatalf("expected non-nil empty slice")
+	}
+	if len(names) != 0 {
+		t.Fatalf("expected empty, got %v", names)
+	}
+}

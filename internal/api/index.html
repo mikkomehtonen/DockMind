@@ -197,6 +197,10 @@
       display: none;
     }
 
+    .state__idle-paused {
+      color: var(--primary);
+    }
+
     .actions {
       display: flex;
       flex-direction: column;
@@ -458,6 +462,17 @@
       gap: 0.5rem;
     }
 
+    .aux__badge {
+      display: inline-block;
+      padding: 0.125rem 0.375rem;
+      border-radius: 999px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      font-size: 0.75rem;
+      color: var(--primary);
+      white-space: nowrap;
+    }
+
     .aux__actions .btn {
       padding: 0.5rem 0.75rem;
       font-size: var(--fs-sm);
@@ -526,6 +541,7 @@
       <p class="state__feedback" id="feedback" hidden></p>
       <p class="state__cooldown" id="cooldown" hidden>Cooldown active — <span id="cooldown-time">0</span>s remaining</p>
       <p class="state__idle" id="idle" hidden>Auto-shutdown in <span id="idle-time">0</span></p>
+      <p class="state__idle state__idle-paused" id="idle-paused" hidden>Auto-shutdown paused</p>
     </section>
 
     <section class="actions">
@@ -645,6 +661,7 @@
       cooldownTime: document.getElementById("cooldown-time"),
       idle: document.getElementById("idle"),
       idleTime: document.getElementById("idle-time"),
+      idlePaused: document.getElementById("idle-paused"),
     };
 
     let pending = false;
@@ -807,11 +824,15 @@
             const running = c.running;
             const dotClass = running ? "component__dot is-on" : "component__dot";
             const statusText = running ? "Running" : "Stopped";
+            const badgeHtml = c.disableIdleShutdown
+              ? '<span class="aux__badge">pauses auto-shutdown</span>'
+              : '';
             return `
               <div class="aux__row">
                 <span class="${dotClass}"></span>
                 <span class="aux__label">${escapeHtml(c.name)}</span>
                 <span class="aux__value">${statusText}</span>
+                ${badgeHtml}
                 <div class="aux__actions">
                   <button class="btn btn--primary aux-btn-start" data-name="${escapeHtml(c.name)}" ${running || !auxStartEnabled ? "disabled" : ""}>Start</button>
                   <button class="btn btn--danger aux-btn-stop" data-name="${escapeHtml(c.name)}" ${!running || !auxStopEnabled ? "disabled" : ""}>Stop</button>
@@ -855,11 +876,16 @@
         els.btnRestart.disabled = !enabled.restart;
       }
 
-      if (data.idleRemaining > 0) {
+      if (data.idleShutdownBlocked) {
+        els.idle.hidden = true;
+        els.idlePaused.hidden = false;
+      } else if (data.idleRemaining > 0) {
         els.idle.hidden = false;
         els.idleTime.textContent = formatIdleRemaining(data.idleRemaining);
+        els.idlePaused.hidden = true;
       } else {
         els.idle.hidden = true;
+        els.idlePaused.hidden = true;
       }
 
       showFeedback("");
