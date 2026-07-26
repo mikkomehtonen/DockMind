@@ -437,6 +437,7 @@
 
     .aux__row {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       gap: 0.625rem;
       padding: 0.625rem 0;
@@ -460,6 +461,10 @@
     .aux__actions {
       display: flex;
       gap: 0.5rem;
+    }
+
+    .aux__badge-row {
+      flex-basis: 100%;
     }
 
     .aux__badge {
@@ -825,18 +830,18 @@
             const dotClass = running ? "component__dot is-on" : "component__dot";
             const statusText = running ? "Running" : "Stopped";
             const badgeHtml = c.disableIdleShutdown
-              ? '<span class="aux__badge">pauses auto-shutdown</span>'
+              ? '<div class="aux__badge-row"><span class="aux__badge">pauses auto-shutdown</span></div>'
               : '';
             return `
               <div class="aux__row">
                 <span class="${dotClass}"></span>
                 <span class="aux__label">${escapeHtml(c.name)}</span>
                 <span class="aux__value">${statusText}</span>
-                ${badgeHtml}
                 <div class="aux__actions">
                   <button class="btn btn--primary aux-btn-start" data-name="${escapeHtml(c.name)}" ${running || !auxStartEnabled ? "disabled" : ""}>Start</button>
                   <button class="btn btn--danger aux-btn-stop" data-name="${escapeHtml(c.name)}" ${!running || !auxStopEnabled ? "disabled" : ""}>Stop</button>
                 </div>
+                ${badgeHtml}
               </div>
             `;
           })

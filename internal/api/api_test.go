@@ -690,6 +690,77 @@ func TestWebUIAuxIdleShutdownBlocking(t *testing.T) {
 	}
 }
 
+func TestWebUIAuxBadgeRowLayout(t *testing.T) {
+	server := NewServer(&fakeStateMachine{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// Badge wrapper string is present in the served HTML.
+	badgeWrapper := `<div class="aux__badge-row"><span class="aux__badge">pauses auto-shutdown</span></div>`
+	if !strings.Contains(body, badgeWrapper) {
+		t.Fatalf("expected body to contain badge wrapper %q", badgeWrapper)
+	}
+
+	// The badge wrapper must appear after the aux__actions <div> in the aux
+	// row template (so it wraps onto its own line, not inline with the
+	// actions). Use the template-specific marker `<div class="aux__actions">`
+	// rather than the bare class name, which also matches the CSS rule.
+	actionsIdx := strings.Index(body, `<div class="aux__actions">`)
+	badgeIdx := strings.Index(body, `${badgeHtml}`)
+	if actionsIdx == -1 {
+		t.Fatalf("expected body to contain <div class=\"aux__actions\">")
+	}
+	if badgeIdx == -1 {
+		t.Fatalf("expected body to contain ${badgeHtml} interpolation")
+	}
+	if badgeIdx <= actionsIdx {
+		t.Fatalf("expected ${badgeHtml} to appear after aux__actions div (actions=%d, badge=%d)", actionsIdx, badgeIdx)
+	}
+
+	assertCSSRuleContains(t, body, `.aux__row {`, `flex-wrap: wrap`)
+	assertCSSRuleContains(t, body, `.aux__badge-row {`, `flex-basis: 100%`)
+
+	badgeRuleBody := cssRuleBody(t, body, `.aux__badge {`)
+	if !strings.Contains(badgeRuleBody, `font-size: 0.75rem`) {
+		t.Fatalf("expected .aux__badge rule to declare font-size: 0.75rem, got %q", badgeRuleBody)
+	}
+	if !strings.Contains(badgeRuleBody, `color: var(--primary)`) {
+		t.Fatalf("expected .aux__badge rule to declare color: var(--primary), got %q", badgeRuleBody)
+	}
+
+	// The badge wrapper is still gated by the disableIdleShutdown ternary.
+	if !strings.Contains(body, `disableIdleShutdown`) {
+		t.Fatalf("expected body to contain disableIdleShutdown token")
+	}
+}
+
+// cssRuleBody returns the body of the first CSS rule whose opening selector
+// matches `selector` (e.g. ".aux__row {"). The returned slice spans from the
+// opening selector through the rule's closing `}`.
+func cssRuleBody(t *testing.T, body, selector string) string {
+	t.Helper()
+	start := strings.Index(body, selector)
+	if start == -1 {
+		t.Fatalf("expected body to contain %q", selector)
+	}
+	end := strings.Index(body[start:], `}`)
+	if end == -1 {
+		t.Fatalf("expected %q rule to close", selector)
+	}
+	return body[start : start+end]
+}
+
+func assertCSSRuleContains(t *testing.T, body, selector, want string) {
+	t.Helper()
+	rule := cssRuleBody(t, body, selector)
+	if !strings.Contains(rule, want) {
+		t.Fatalf("expected %s rule to contain %q, got %q", selector, want, rule)
+	}
+}
+
 func TestWebUIRoutes(t *testing.T) {
 	t.Setenv("LOGO_LINK_URL", "")
 	server := NewServer(&fakeStateMachine{}, nil)
