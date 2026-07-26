@@ -466,7 +466,7 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected auxContainers.items.properties to be an object")
 		}
-		for _, field := range []string{"name", "running", "disableIdleShutdown"} {
+		for _, field := range []string{"name", "running", "disableIdleShutdown", "unloadLlamaSwap"} {
 			if _, ok := auxProps[field]; !ok {
 				t.Fatalf("expected auxContainers.items.properties to contain %q", field)
 			}
@@ -698,10 +698,14 @@ func TestWebUIAuxBadgeRowLayout(t *testing.T) {
 
 	body := rec.Body.String()
 
-	// Badge wrapper string is present in the served HTML.
-	badgeWrapper := `<div class="aux__badge-row"><span class="aux__badge">pauses auto-shutdown</span></div>`
-	if !strings.Contains(body, badgeWrapper) {
-		t.Fatalf("expected body to contain badge wrapper %q", badgeWrapper)
+	// The badge content (literal inside badges.push(...)) is present in the
+	// served HTML. The full wrapper string is no longer a single literal
+	// because the badge logic now uses a badges array with push/join.
+	if !strings.Contains(body, `<span class="aux__badge">pauses auto-shutdown</span>`) {
+		t.Fatalf("expected body to contain badge content %q", `<span class="aux__badge">pauses auto-shutdown</span>`)
+	}
+	if !strings.Contains(body, `aux__badge-row`) {
+		t.Fatalf("expected body to contain aux__badge-row wrapper class")
 	}
 
 	// The badge wrapper must appear after the aux__actions <div> in the aux
@@ -731,9 +735,36 @@ func TestWebUIAuxBadgeRowLayout(t *testing.T) {
 		t.Fatalf("expected .aux__badge rule to declare color: var(--primary), got %q", badgeRuleBody)
 	}
 
-	// The badge wrapper is still gated by the disableIdleShutdown ternary.
+	// The badge logic still references disableIdleShutdown.
 	if !strings.Contains(body, `disableIdleShutdown`) {
 		t.Fatalf("expected body to contain disableIdleShutdown token")
+	}
+}
+
+func TestWebUIAuxUnloadLlamaSwapBadge(t *testing.T) {
+	server := NewServer(&fakeStateMachine{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// The badge condition references c.unloadLlamaSwap and the badge label
+	// text "unloads llama-swap" is present in the served HTML.
+	if !strings.Contains(body, `unloadLlamaSwap`) {
+		t.Fatalf("expected body to contain unloadLlamaSwap token")
+	}
+	if !strings.Contains(body, `unloads llama-swap`) {
+		t.Fatalf("expected body to contain badge label %q", `unloads llama-swap`)
+	}
+
+	// The badge logic supports both badges simultaneously via a badges array
+	// with push/join.
+	if !strings.Contains(body, `badges.push`) {
+		t.Fatalf("expected body to contain badges.push (array-based badge logic)")
+	}
+	if !strings.Contains(body, `badges.join`) {
+		t.Fatalf("expected body to contain badges.join (array-based badge logic)")
 	}
 }
 

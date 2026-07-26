@@ -101,15 +101,24 @@ type AuxContainerStatus struct {
 	Name                string `json:"name"`
 	Running             bool   `json:"running"`
 	DisableIdleShutdown bool   `json:"disableIdleShutdown,omitempty"`
+	UnloadLlamaSwap     bool   `json:"unloadLlamaSwap,omitempty"`
 }
 
 type AuxContainerController interface {
 	Names() []string
 	IdleBlockingNames() []string
+	NeedsUnloadBeforeStart(name string) bool
 	Start(ctx context.Context, name string) error
 	Stop(ctx context.Context, name string) error
 	IsRunning(ctx context.Context, name string) (bool, error)
 	StopAll(ctx context.Context) error
+}
+
+// ModelUnloader unloads all currently loaded models from llama-swap to free
+// GPU VRAM. Implementations are expected to be safe to call when no models
+// are loaded (a no-op) and to return an error when llama-swap is unreachable.
+type ModelUnloader interface {
+	Unload(ctx context.Context) error
 }
 
 type StatusResponse struct {
@@ -136,6 +145,7 @@ type Machine struct {
 	health   HealthChecker
 	unbinder Unbinder
 	aux      AuxContainerController
+	unloader ModelUnloader
 	logger   *slog.Logger
 
 	pollInterval         time.Duration
@@ -179,6 +189,13 @@ func New(power PowerController, gpu GPUMonitor, docker ContainerController, heal
 
 func (m *Machine) SetAuxContainers(ctrl AuxContainerController) {
 	m.aux = ctrl
+}
+
+// SetModelUnloader wires the llama-swap model unloader used before starting
+// aux containers configured with UnloadLlamaSwap. Passing nil disables the
+// unload step (used when no backendUrl is configured).
+func (m *Machine) SetModelUnloader(u ModelUnloader) {
+	m.unloader = u
 }
 
 // Reconcile performs a one-shot startup probe. If the machine is Off and all
@@ -432,6 +449,7 @@ func (m *Machine) probeAuxContainers() []AuxContainerStatus {
 			Name:                name,
 			Running:             running,
 			DisableIdleShutdown: disableIdle,
+			UnloadLlamaSwap:     m.aux.NeedsUnloadBeforeStart(name),
 		})
 	}
 	return statuses
@@ -499,6 +517,15 @@ func (m *Machine) doAuxOperation(name string, start bool) AuxResult {
 	} else {
 		if current != Off && current != Ready {
 			return AuxResultConflict
+		}
+	}
+
+	if start && m.unloader != nil && m.aux.NeedsUnloadBeforeStart(name) {
+		unloadCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := m.unloader.Unload(unloadCtx); err != nil {
+			m.logger.Warn("llama-swap unload before aux start failed, continuing with start",
+				"name", name, "error", err)
 		}
 	}
 

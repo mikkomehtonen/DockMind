@@ -60,6 +60,7 @@ type ContainerSpec struct {
 	Name                string
 	Container           string
 	DisableIdleShutdown bool
+	UnloadLlamaSwap     bool
 }
 
 type Manager struct {
@@ -130,6 +131,17 @@ func (m *Manager) IsRunning(ctx context.Context, name string) (bool, error) {
 		return false, ErrUnknownContainer
 	}
 	return c.IsRunning(ctx)
+}
+
+// NeedsUnloadBeforeStart reports whether the named container is configured
+// with UnloadLlamaSwap. Returns false for unknown names.
+func (m *Manager) NeedsUnloadBeforeStart(name string) bool {
+	for _, spec := range m.specs {
+		if spec.Name == name {
+			return spec.UnloadLlamaSwap
+		}
+	}
+	return false
 }
 
 func (m *Manager) StopAll(ctx context.Context) error {

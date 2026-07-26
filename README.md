@@ -12,6 +12,7 @@ DockMind is a lightweight daemon that manages the lifecycle of an AI inference s
 - **Health Monitoring** — checks `llama-swap` readiness through its `/running` endpoint and reports the currently loaded model name(s) in status and the web UI.
 - **OpenAI-Compatible Gateway** — opt-in reverse proxy that forwards OpenAI SDK requests to the backend, with auto-startup on first request and idle shutdown to save power. Cached model list is served when the backend is off.
 - **Idle Shutdown Suppression** — aux containers with `disableIdleShutdown: true` suppress the gateway idle timer while running, allowing GPU-direct workloads to keep the system on.
+- **Aux Container VRAM Unload** — aux containers with `unloadLlamaSwap: true` call the llama-swap `GET <backendUrl>/unload` endpoint before starting, freeing GPU VRAM so GPU-direct workloads like ComfyUI get full VRAM even when llama-swap has a model loaded.
 
 See [docs/product.md](docs/product.md) for the full feature list and non-goals.
 
@@ -122,6 +123,9 @@ cooldown is active.
 
 ```yaml
 auxContainers:
+  - name: comfyui
+    container: comfyui
+    unloadLlamaSwap: true
   - name: kokoro
     container: kokoro-tts
     disableIdleShutdown: true
@@ -140,6 +144,14 @@ is running. This is useful for GPU-direct workloads (e.g. training, TTS
 generation) that bypass the gateway inference proxy and would otherwise trigger
 an idle shutdown. When suppressed, `GET /status` reports
 `"idleShutdownBlocked": true` and `idleRemaining` is always `0`.
+
+Set `unloadLlamaSwap: true` on an aux container to call the llama-swap
+`GET <backendUrl>/unload` endpoint before starting it, freeing GPU VRAM so
+GPU-direct workloads (e.g. ComfyUI) get full VRAM even when llama-swap has a
+model loaded. If the unload call fails (llama-swap down), the container start
+proceeds anyway — if llama-swap is down, VRAM is likely already free. This
+option requires `llamaSwap.backendUrl` to be set. The web UI shows an
+"unloads llama-swap" badge on containers with this flag.
 
 ### Gateway Configuration
 
@@ -211,6 +223,11 @@ shows an auto-shutdown countdown. The countdown is hidden when the state is not
   "idleRemaining": 0,
   "idleShutdownBlocked": false,
   "auxContainers": [
+    {
+      "name": "comfyui",
+      "running": false,
+      "unloadLlamaSwap": true
+    },
     {
       "name": "kokoro",
       "running": false,

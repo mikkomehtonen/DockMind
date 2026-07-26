@@ -222,18 +222,41 @@ func (f *fakeUnbinder) Unbind(ctx context.Context) error {
 	return f.unbindErr
 }
 
+type fakeUnloader struct {
+	mu        sync.Mutex
+	calls     int
+	lastCtx   context.Context
+	err       error
+	order     func() int
+	lastOrder int
+}
+
+func (f *fakeUnloader) Unload(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.lastCtx = ctx
+	if f.order != nil {
+		f.lastOrder = f.order()
+	}
+	return f.err
+}
+
 type fakeAuxController struct {
-	mu           sync.Mutex
-	names        []string
-	startCalls   []string
-	stopCalls    []string
-	stopAllCalls int
-	isRunning    map[string]bool
-	startErr     error
-	stopErr      error
-	stopAllErr   error
-	isRunningErr error
-	idleBlocking []string
+	mu                sync.Mutex
+	names             []string
+	startCalls        []string
+	stopCalls         []string
+	stopAllCalls      int
+	isRunning         map[string]bool
+	startErr          error
+	stopErr           error
+	stopAllErr        error
+	isRunningErr      error
+	idleBlocking      []string
+	unloadBeforeStart map[string]bool
+	startOrder        func() int
+	lastStartOrder    int
 }
 
 func (f *fakeAuxController) Names() []string {
@@ -244,6 +267,9 @@ func (f *fakeAuxController) Start(ctx context.Context, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.startCalls = append(f.startCalls, name)
+	if f.startOrder != nil {
+		f.lastStartOrder = f.startOrder()
+	}
 	if f.startErr != nil {
 		return f.startErr
 	}
@@ -295,6 +321,13 @@ func (f *fakeAuxController) StopAll(ctx context.Context) error {
 
 func (f *fakeAuxController) IdleBlockingNames() []string {
 	return f.idleBlocking
+}
+
+func (f *fakeAuxController) NeedsUnloadBeforeStart(name string) bool {
+	if f.unloadBeforeStart == nil {
+		return false
+	}
+	return f.unloadBeforeStart[name]
 }
 
 func newTestMachine() (*Machine, *fakePower, *fakeGPU, *fakeDocker, *fakeHealth, *fakeUnbinder) {
@@ -2988,6 +3021,181 @@ func TestStatusAuxDisableIdleShutdown(t *testing.T) {
 	// populated by the API handler from the idle reporter.
 	if status.IdleShutdownBlocked {
 		t.Fatalf("expected IdleShutdownBlocked=false from Status() (set by API handler, not Status)")
+	}
+}
+
+func TestStatusAuxUnloadLlamaSwap(t *testing.T) {
+	m, _, _, _, _, _ := newTestMachine()
+	aux := &fakeAuxController{
+		names:             []string{"comfyui", "kokoro"},
+		isRunning:         map[string]bool{"comfyui": false, "kokoro": false},
+		unloadBeforeStart: map[string]bool{"comfyui": true},
+	}
+	m.SetAuxContainers(aux)
+	m.state = Ready
+
+	status := m.Status()
+	if len(status.AuxContainers) != 2 {
+		t.Fatalf("expected 2 aux containers, got %d", len(status.AuxContainers))
+	}
+	if !status.AuxContainers[0].UnloadLlamaSwap {
+		t.Fatalf("expected comfyui UnloadLlamaSwap=true")
+	}
+	if status.AuxContainers[1].UnloadLlamaSwap {
+		t.Fatalf("expected kokoro UnloadLlamaSwap=false")
+	}
+}
+
+func TestStartAuxContainerUnloadsLlamaSwap(t *testing.T) {
+	cases := []struct {
+		name              string
+		state             State
+		unloadBeforeStart map[string]bool
+		unloaderErr       error
+		setUnloader       bool
+		want              AuxResult
+		wantStart         bool
+		wantUnloadCalls   int
+	}{
+		{
+			name:              "Ready with unload flag calls unloader before start",
+			state:             Ready,
+			unloadBeforeStart: map[string]bool{"comfyui": true},
+			setUnloader:       true,
+			want:              AuxResultOK,
+			wantStart:         true,
+			wantUnloadCalls:   1,
+		},
+		{
+			name:              "Ready with unload flag and unloader error still starts",
+			state:             Ready,
+			unloadBeforeStart: map[string]bool{"comfyui": true},
+			setUnloader:       true,
+			unloaderErr:       errors.New("llama-swap down"),
+			want:              AuxResultOK,
+			wantStart:         true,
+			wantUnloadCalls:   1,
+		},
+		{
+			name:              "Ready without unload flag does not call unloader",
+			state:             Ready,
+			unloadBeforeStart: map[string]bool{},
+			setUnloader:       true,
+			want:              AuxResultOK,
+			wantStart:         true,
+			wantUnloadCalls:   0,
+		},
+		{
+			name:              "Ready with unload flag but nil unloader does not panic",
+			state:             Ready,
+			unloadBeforeStart: map[string]bool{"comfyui": true},
+			setUnloader:       false,
+			want:              AuxResultOK,
+			wantStart:         true,
+			wantUnloadCalls:   0,
+		},
+		{
+			name:              "Off with unload flag returns conflict before unload",
+			state:             Off,
+			unloadBeforeStart: map[string]bool{"comfyui": true},
+			setUnloader:       true,
+			want:              AuxResultConflict,
+			wantStart:         false,
+			wantUnloadCalls:   0,
+		},
+		{
+			name:              "Starting with unload flag returns conflict before unload",
+			state:             Starting,
+			unloadBeforeStart: map[string]bool{"comfyui": true},
+			setUnloader:       true,
+			want:              AuxResultConflict,
+			wantStart:         false,
+			wantUnloadCalls:   0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, _, _, _, _, handler := newTestMachineWithRecorder()
+			aux := &fakeAuxController{
+				names:             []string{"comfyui"},
+				isRunning:         map[string]bool{"comfyui": false},
+				unloadBeforeStart: tc.unloadBeforeStart,
+			}
+			m.SetAuxContainers(aux)
+			m.state = tc.state
+			if tc.setUnloader {
+				unloader := &fakeUnloader{err: tc.unloaderErr}
+				m.SetModelUnloader(unloader)
+				got := m.StartAuxContainer("comfyui")
+				if got != tc.want {
+					t.Fatalf("expected %v, got %v", tc.want, got)
+				}
+				if unloader.calls != tc.wantUnloadCalls {
+					t.Fatalf("expected unloader calls %d, got %d", tc.wantUnloadCalls, unloader.calls)
+				}
+			} else {
+				got := m.StartAuxContainer("comfyui")
+				if got != tc.want {
+					t.Fatalf("expected %v, got %v", tc.want, got)
+				}
+			}
+			if tc.wantStart {
+				if len(aux.startCalls) != 1 || aux.startCalls[0] != "comfyui" {
+					t.Fatalf("expected Start called with comfyui, got %v", aux.startCalls)
+				}
+			} else {
+				if len(aux.startCalls) != 0 {
+					t.Fatalf("expected Start not called, got %v", aux.startCalls)
+				}
+			}
+			if tc.unloaderErr != nil {
+				if !handler.hasRecord(slog.LevelWarn, "llama-swap unload before aux start failed") {
+					t.Fatal("expected WARN log for unload failure")
+				}
+			}
+		})
+	}
+}
+
+func TestStartAuxContainerUnloadBeforeStartOrdering(t *testing.T) {
+	// Verify the unloader is called BEFORE aux.Start (so VRAM is freed before
+	// the container starts). Both fakes record a shared sequence counter so
+	// the test can assert the relative order of the two calls.
+	var seq int
+	var mu sync.Mutex
+	record := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		seq++
+		return seq
+	}
+
+	m, _, _, _, _, _ := newTestMachine()
+	aux := &fakeAuxController{
+		names:             []string{"comfyui"},
+		isRunning:         map[string]bool{"comfyui": false},
+		unloadBeforeStart: map[string]bool{"comfyui": true},
+	}
+	aux.startOrder = func() int { return record() }
+	m.SetAuxContainers(aux)
+	m.state = Ready
+
+	unloader := &fakeUnloader{}
+	unloader.order = func() int { return record() }
+	m.SetModelUnloader(unloader)
+
+	if got := m.StartAuxContainer("comfyui"); got != AuxResultOK {
+		t.Fatalf("expected AuxResultOK, got %v", got)
+	}
+	if unloader.calls != 1 {
+		t.Fatalf("expected unloader called once, got %d", unloader.calls)
+	}
+	if len(aux.startCalls) != 1 {
+		t.Fatalf("expected Start called once, got %d", len(aux.startCalls))
+	}
+	if unloader.lastOrder >= aux.lastStartOrder {
+		t.Fatalf("expected unloader (order %d) to be called before aux.Start (order %d)", unloader.lastOrder, aux.lastStartOrder)
 	}
 }
 

@@ -803,6 +803,101 @@ auxContainers:
 			wantErr: true,
 			errSubs: []string{"duplicate"},
 		},
+		{
+			name: "unloadLlamaSwap true on one entry with backendUrl set",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+  backendUrl: http://localhost:1234
+auxContainers:
+  - name: comfyui
+    container: comfyui
+    unloadLlamaSwap: true
+  - name: kokoro
+    container: kokoro-tts
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if len(cfg.AuxContainers) != 2 {
+					t.Fatalf("expected 2 aux containers, got %d", len(cfg.AuxContainers))
+				}
+				if !cfg.AuxContainers[0].UnloadLlamaSwap {
+					t.Error("expected comfyui UnloadLlamaSwap=true")
+				}
+				if cfg.AuxContainers[1].UnloadLlamaSwap {
+					t.Error("expected kokoro UnloadLlamaSwap=false (absent = default)")
+				}
+			},
+		},
+		{
+			name: "unloadLlamaSwap true without backendUrl fails",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+auxContainers:
+  - name: comfyui
+    container: comfyui
+    unloadLlamaSwap: true
+`,
+			wantErr: true,
+			errSubs: []string{"llamaSwap.backendUrl is required when an aux container has unloadLlamaSwap: true"},
+		},
+		{
+			name: "unloadLlamaSwap true with backendUrl and gateway disabled ok",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+  backendUrl: http://localhost:1234
+gateway:
+  enabled: false
+auxContainers:
+  - name: comfyui
+    container: comfyui
+    unloadLlamaSwap: true
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if !cfg.AuxContainers[0].UnloadLlamaSwap {
+					t.Error("expected comfyui UnloadLlamaSwap=true")
+				}
+				if cfg.Gateway.Enabled {
+					t.Error("expected gateway disabled")
+				}
+			},
+		},
+		{
+			name: "no unloadLlamaSwap key on any entry defaults to false",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+auxContainers:
+  - name: comfyui
+    container: comfyui
+  - name: kokoro
+    container: kokoro-tts
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if len(cfg.AuxContainers) != 2 {
+					t.Fatalf("expected 2 aux containers, got %d", len(cfg.AuxContainers))
+				}
+				if cfg.AuxContainers[0].UnloadLlamaSwap {
+					t.Error("expected comfyui UnloadLlamaSwap=false (absent = default)")
+				}
+				if cfg.AuxContainers[1].UnloadLlamaSwap {
+					t.Error("expected kokoro UnloadLlamaSwap=false (absent = default)")
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {

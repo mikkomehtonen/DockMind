@@ -108,4 +108,10 @@
 **What happened**: In story 026, restructuring `Gateway.tick()` to gate the blocked-check behind the active-check caused a deadlock. The active-check acquired `activeMu` and then called `g.machine.IdleShutdownBlocked()` (which does live docker probes) while still holding the lock. Tests that tried to acquire `activeMu` to set `lastActivity` deadlocked because the tick held the lock across the slow probe. Additionally, the idle-check after the probe read `g.lastActivity` and `g.pendingShutdown` without re-acquiring the lock, then called `g.activeMu.Unlock()` which panicked.
 **Takeaway**: When restructuring a tick loop that calls a potentially-slow probe (docker inspect, HTTP request, subprocess), release the mutex before the probe and re-acquire it before reading/writing the protected state. Trace every lock acquisition and release path after restructuring — a missing `Lock()` before a read or a stray `Unlock()` without a matching `Lock()` will deadlock or panic.
 
+## Tests that claim to verify an invariant must actually verify it
+**Date**: 2026-07-26
+**Area**: testing / code review
+**What happened**: In story 028, `TestStartAuxContainerUnloadBeforeStartOrdering` was named and commented to verify that the unloader is called before `aux.Start`, but the assertions only checked call counts (`unloader.calls == 1`, `len(aux.startCalls) == 1`). If a future refactor swapped the order, the test would still pass — false confidence on the feature's core invariant. The code reviewer flagged this as blocking.
+**Takeaway**: When a test name or comment claims to verify a specific invariant (ordering, atomicity, exclusivity), the assertions must actually check that invariant. For ordering, use a shared sequence counter stamped by both fakes and assert the relative order. For atomicity, assert that no intermediate state is observable. Call-count assertions alone prove "both happened," not "in the right order."
+
 

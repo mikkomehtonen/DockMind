@@ -829,8 +829,11 @@
             const running = c.running;
             const dotClass = running ? "component__dot is-on" : "component__dot";
             const statusText = running ? "Running" : "Stopped";
-            const badgeHtml = c.disableIdleShutdown
-              ? '<div class="aux__badge-row"><span class="aux__badge">pauses auto-shutdown</span></div>'
+            const badges = [];
+            if (c.disableIdleShutdown) badges.push('<span class="aux__badge">pauses auto-shutdown</span>');
+            if (c.unloadLlamaSwap) badges.push('<span class="aux__badge">unloads llama-swap</span>');
+            const badgeHtml = badges.length > 0
+              ? `<div class="aux__badge-row">${badges.join('')}</div>`
               : '';
             return `
               <div class="aux__row">

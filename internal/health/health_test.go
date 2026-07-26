@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -119,4 +120,68 @@ func TestCheckUnreachable(t *testing.T) {
 	if got {
 		t.Fatalf("expected false for unreachable server")
 	}
+}
+
+func TestUnloadClient(t *testing.T) {
+	t.Run("200 OK returns nil and uses GET /unload", func(t *testing.T) {
+		var gotMethod, gotPath string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotMethod = r.Method
+			gotPath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("OK"))
+		}))
+		defer server.Close()
+
+		client := NewUnloadClient(server.URL)
+		if err := client.Unload(context.Background()); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if gotMethod != http.MethodGet {
+			t.Fatalf("expected GET, got %q", gotMethod)
+		}
+		if gotPath != "/unload" {
+			t.Fatalf("expected path /unload, got %q", gotPath)
+		}
+	})
+
+	t.Run("500 returns error containing status", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		client := NewUnloadClient(server.URL)
+		err := client.Unload(context.Background())
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "status 500") {
+			t.Fatalf("expected error to contain 'status 500', got %q", err.Error())
+		}
+	})
+
+	t.Run("unreachable server returns error", func(t *testing.T) {
+		client := NewUnloadClient("http://127.0.0.1:1")
+		if err := client.Unload(context.Background()); err == nil {
+			t.Fatal("expected error for unreachable server, got nil")
+		}
+	})
+
+	t.Run("trailing slash on backendURL yields /unload path", func(t *testing.T) {
+		var gotPath string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		client := NewUnloadClient(server.URL + "/")
+		if err := client.Unload(context.Background()); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if gotPath != "/unload" {
+			t.Fatalf("expected path /unload, got %q", gotPath)
+		}
+	})
 }

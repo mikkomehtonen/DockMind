@@ -46,6 +46,7 @@ type AuxContainerConfig struct {
 	Name                string `yaml:"name"`
 	Container           string `yaml:"container"`
 	DisableIdleShutdown bool   `yaml:"disableIdleShutdown"`
+	UnloadLlamaSwap     bool   `yaml:"unloadLlamaSwap"`
 }
 
 type LlamaSwapConfig struct {
@@ -189,6 +190,11 @@ func validate(cfg *Config) error {
 		}
 		if cfg.Gateway.ModelsRefreshInterval <= 0 {
 			return errors.New("gateway.modelsRefreshInterval must be positive")
+		}
+	}
+	for _, aux := range cfg.AuxContainers {
+		if aux.UnloadLlamaSwap && cfg.LlamaSwap.BackendURL == "" {
+			return errors.New("llamaSwap.backendUrl is required when an aux container has unloadLlamaSwap: true")
 		}
 	}
 	return nil

@@ -426,3 +426,28 @@ func TestManagerIdleBlockingNamesZeroSpecs(t *testing.T) {
 		t.Fatalf("expected empty, got %v", names)
 	}
 }
+
+func TestManagerNeedsUnloadBeforeStart(t *testing.T) {
+	m, _ := newTestManager([]ContainerSpec{
+		{Name: "comfyui", Container: "comfyui", UnloadLlamaSwap: true},
+		{Name: "kokoro", Container: "kokoro-tts"},
+	})
+
+	if !m.NeedsUnloadBeforeStart("comfyui") {
+		t.Fatal("expected NeedsUnloadBeforeStart(comfyui) = true")
+	}
+	if m.NeedsUnloadBeforeStart("kokoro") {
+		t.Fatal("expected NeedsUnloadBeforeStart(kokoro) = false")
+	}
+	if m.NeedsUnloadBeforeStart("unknown") {
+		t.Fatal("expected NeedsUnloadBeforeStart(unknown) = false")
+	}
+}
+
+func TestManagerNeedsUnloadBeforeStartNoSpecs(t *testing.T) {
+	m, _ := newTestManager(nil)
+
+	if m.NeedsUnloadBeforeStart("anything") {
+		t.Fatal("expected NeedsUnloadBeforeStart(anything) = false with no specs")
+	}
+}

@@ -3,8 +3,10 @@ package health
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -54,4 +56,40 @@ func (c *Client) Check(ctx context.Context) (bool, []string, error) {
 		}
 	}
 	return true, models, nil
+}
+
+// UnloadClient calls the llama-swap unload endpoint to free GPU VRAM by
+// unloading all currently loaded models. The endpoint is GET <backendURL>/unload.
+type UnloadClient struct {
+	url    string
+	client *http.Client
+}
+
+// NewUnloadClient constructs an UnloadClient targeting <backendURL>/unload.
+// Trailing slashes on backendURL are trimmed so the resulting path is /unload
+// (not //unload).
+func NewUnloadClient(backendURL string) *UnloadClient {
+	return &UnloadClient{
+		url:    strings.TrimRight(backendURL, "/") + "/unload",
+		client: &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// Unload issues GET <backendURL>/unload. It returns nil on a 200 OK response
+// and an error on any non-200 status or transport failure.
+func (c *UnloadClient) Unload(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("llama-swap unload returned status %d", resp.StatusCode)
+	}
+	return nil
 }

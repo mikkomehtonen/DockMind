@@ -64,6 +64,8 @@ func TestREADME(t *testing.T) {
 		{"documents cooldown feature", "cooldown", true},
 		{"documents idle countdown feature", "idleRemaining", true},
 		{"documents auxContainers config section", "auxContainers", true},
+		{"documents unloadLlamaSwap config", "unloadLlamaSwap", true},
+		{"status example includes unloadLlamaSwap field", "unloadLlamaSwap", true},
 		{"does not leak ResultAlreadyInState", "ResultAlreadyInState", false},
 		{"does not leak ResultConflict", "ResultConflict", false},
 	}

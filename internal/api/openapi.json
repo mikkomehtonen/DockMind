@@ -275,7 +275,8 @@
               "properties": {
                 "name": { "type": "string" },
                 "running": { "type": "boolean" },
-                "disableIdleShutdown": { "type": "boolean", "description": "True when this container suppresses idle auto-shutdown while running. Omitted when false." }
+                "disableIdleShutdown": { "type": "boolean", "description": "True when this container suppresses idle auto-shutdown while running. Omitted when false." },
+                "unloadLlamaSwap": { "type": "boolean", "description": "True when llama-swap models are unloaded before starting this container. Omitted when false." }
               }
             },
             "description": "Status of optional aux containers. Empty array when none are configured."

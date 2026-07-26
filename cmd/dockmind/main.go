@@ -59,10 +59,14 @@ func main() {
 			Name:                aux.Name,
 			Container:           aux.Container,
 			DisableIdleShutdown: aux.DisableIdleShutdown,
+			UnloadLlamaSwap:     aux.UnloadLlamaSwap,
 		}
 	}
 	auxManager := docker.NewManager(auxSpecs)
 	machine.SetAuxContainers(auxManager)
+	if cfg.LlamaSwap.BackendURL != "" {
+		machine.SetModelUnloader(health.NewUnloadClient(cfg.LlamaSwap.BackendURL))
+	}
 	machine.Reconcile()
 
 	server := api.NewServer(machine, logger)

@@ -18,11 +18,12 @@ shutdown:
 power:
   cooldown: 0s
 # auxContainers:
+#   - name: comfyui
+#     container: comfyui
+#     unloadLlamaSwap: true
 #   - name: kokoro
 #     container: kokoro-tts
 #     disableIdleShutdown: true
-#   - name: whisper
-#     container: whisper-stt
 gateway:
   enabled: false
   modelsRefreshInterval: 60s
