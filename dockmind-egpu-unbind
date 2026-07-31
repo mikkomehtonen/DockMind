@@ -18,8 +18,8 @@ readonly LOCK_FILE="/run/lock/dockmind-egpu-unbind.lock"
 # NVIDIA
 readonly EXPECTED_VENDOR="0x10de"
 
-# RTX 5060 Ti GB206, based on your sysfs output.
-readonly EXPECTED_DEVICE="0x2d04"
+# RTX 5070 ti
+readonly EXPECTED_DEVICE="0x2c05"
 
 # PCI base classes.
 readonly DISPLAY_CLASS_PREFIX="0x03"
