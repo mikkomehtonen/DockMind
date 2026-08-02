@@ -1,0 +1,2 @@
+dockmind ALL=(root) NOPASSWD: /usr/bin/systemctl start dockmind-egpu-unbind.service
+dockmind ALL=(root) NOPASSWD: /usr/bin/systemctl start lactd, /bin/systemctl stop lactd
