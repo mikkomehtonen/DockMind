@@ -1,0 +1,8 @@
+ACTION=="add|change", \
+SUBSYSTEM=="drm", \
+ENV{DEVTYPE}=="drm_minor", \
+KERNEL=="card[0-9]*", \
+SUBSYSTEMS=="pci", \
+ATTRS{vendor}=="0x10de", \
+ATTRS{device}=="0x2c05", \
+TAG+="mutter-device-ignore"
