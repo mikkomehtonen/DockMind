@@ -114,4 +114,20 @@
 **What happened**: In story 028, `TestStartAuxContainerUnloadBeforeStartOrdering` was named and commented to verify that the unloader is called before `aux.Start`, but the assertions only checked call counts (`unloader.calls == 1`, `len(aux.startCalls) == 1`). If a future refactor swapped the order, the test would still pass — false confidence on the feature's core invariant. The code reviewer flagged this as blocking.
 **Takeaway**: When a test name or comment claims to verify a specific invariant (ordering, atomicity, exclusivity), the assertions must actually check that invariant. For ordering, use a shared sequence counter stamped by both fakes and assert the relative order. For atomicity, assert that no intermediate state is observable. Call-count assertions alone prove "both happened," not "in the right order."
 
+---
+
+## Fresh timeout context per shutdown phase — never reuse a consumed phase context
+**Date**: 2026-08-02
+**Area**: concurrency / state machine
+**What happened**: In story 029, the LACT stop hook reused `ctx1` (the Phase 1 context already consumed by `docker.Stop` + the stop poll). The code reviewer flagged it as blocking: by Phase 1c `ctx1` can be near expiry, so `lact.Stop` could fail with `context deadline exceeded` even though systemd would have succeeded — silently defeating the feature. The existing Phase 1b aux block already created a fresh `ctx1b` for exactly this reason.
+**Takeaway**: In `shutdown()`, each phase gets its own fresh `context.WithTimeout` (ctx1, ctx1b, ctx1c, ctx2). Never reuse a phase context for a later phase — it may be near expiry after slow earlier phases. Mirror the existing per-phase pattern.
+
+---
+
+## Story "implementation approach" is guidance — codebase conventions win
+**Date**: 2026-08-02
+**Area**: workflow / code review
+**What happened**: Story 029's implementation approach said the Machine should hold a pointer to `*lact.Client`, but the `state` core is intentionally stdlib-only and wires every collaborator through an interface. The code reviewer flagged the concrete pointer as a blocking simplicity issue; switching to a `LactController` interface (matching `Unbinder`/`ModelUnloader`/`AuxContainerController`) resolved it without touching any AC.
+**Takeaway**: When a story's implementation approach conflicts with an established codebase pattern, follow the codebase pattern — ACs are behavioral, the approach section is guidance. Interface-based wiring in `state` is the norm; concrete pointers get flagged.
+
 

@@ -927,6 +927,81 @@ auxContainers:
 	}
 }
 
+func TestLactConfig(t *testing.T) {
+	tmp := t.TempDir()
+
+	cases := []struct {
+		name    string
+		content string
+		assert  func(t *testing.T, cfg *Config)
+	}{
+		{
+			name: "lact enabled true",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+lact:
+  enabled: true
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if !cfg.Lact.Enabled {
+					t.Error("expected lact enabled")
+				}
+			},
+		},
+		{
+			name: "lact enabled false",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+lact:
+  enabled: false
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if cfg.Lact.Enabled {
+					t.Error("expected lact disabled")
+				}
+			},
+		},
+		{
+			name: "lact section absent defaults to disabled",
+			content: `shelly:
+  address: 192.168.1.50
+docker:
+  container: llama-swap
+llamaSwap:
+  healthUrl: http://localhost:1234/v1/models
+`,
+			assert: func(t *testing.T, cfg *Config) {
+				if cfg.Lact.Enabled {
+					t.Error("expected lact disabled by default")
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(tmp, tc.name+".yaml")
+			if err := os.WriteFile(path, []byte(tc.content), 0644); err != nil {
+				t.Fatalf("write file: %v", err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			tc.assert(t, cfg)
+		})
+	}
+}
+
 func TestLoadConfigsExample(t *testing.T) {
 	path := filepath.Join("..", "..", "configs", "config.yaml")
 	cfg, err := Load(path)

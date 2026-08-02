@@ -33,7 +33,7 @@ The root-level test package imports `internal/config` — allowed because the re
 
 `cmd/dockmind/main.go` wires real clients into the state machine and HTTP server.
 
-`internal/state` is the core. It defines four interfaces (`PowerController`, `GPUMonitor`, `ContainerController`, `HealthChecker`) that `internal/{shelly,gpu,docker,health}` satisfy. `internal/api` defines its own `StateMachine` interface so handler tests use a fake, decoupled from the real state machine.
+`internal/state` is the core. It defines interfaces for every collaborator (`PowerController`, `GPUMonitor`, `ContainerController`, `HealthChecker`, `Unbinder`, `ModelUnloader`, `AuxContainerController`, `LactController`) that `internal/{shelly,gpu,docker,health,unbind,lact}` satisfy. `state` never imports concrete internal packages — new optional features must be wired via an interface defined in `state` plus a `Set*Client` setter, not a concrete pointer. `internal/api` defines its own `StateMachine` interface so handler tests use a fake, decoupled from the real state machine.
 
 State machine concurrency: `transitionMu` is acquired with `TryLock()` and held for the entire async transition — ownership is passed to the goroutine, which `defer`s the unlock. Never release it in the synchronous path. `stateMu` guards only the `state`/`lastError` fields briefly. A `sync.WaitGroup` backs `Machine.Wait()`; tests call it to block deterministically until an async transition finishes.
 

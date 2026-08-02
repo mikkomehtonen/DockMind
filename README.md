@@ -100,6 +100,8 @@ shutdown:
   gpuFreeCheckInterval: 5m
 power:
   cooldown: 0s
+lact:
+  enabled: false
 ```
 
 `power.cooldown` sets a minimum delay between power cycles. When set to a
@@ -108,6 +110,12 @@ reaches Off, and `POST /power/off` is blocked for that long after the system
 reaches Ready. Blocked requests return `429 Too Many Requests`; `GET /status`
 reports the remaining seconds in `cooldownRemaining`. The default is `0s`
 (disabled).
+
+Set `lact.enabled: true` to have DockMind stop the LACT daemon (`lactd`
+systemd service) during shutdown before the eGPU driver is unbound, and start
+it again during startup once the GPU is detected. This prevents LACT from
+permanently losing GPU detection across power cycles. When disabled (the
+default), DockMind does not touch the LACT service.
 
 ### Optional Aux Containers
 

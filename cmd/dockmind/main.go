@@ -16,6 +16,7 @@ import (
 	"github.com/dockmind/dockmind/internal/gateway"
 	"github.com/dockmind/dockmind/internal/gpu"
 	"github.com/dockmind/dockmind/internal/health"
+	"github.com/dockmind/dockmind/internal/lact"
 	"github.com/dockmind/dockmind/internal/shelly"
 	"github.com/dockmind/dockmind/internal/state"
 	"github.com/dockmind/dockmind/internal/unbind"
@@ -67,6 +68,7 @@ func main() {
 	if cfg.LlamaSwap.BackendURL != "" {
 		machine.SetModelUnloader(health.NewUnloadClient(cfg.LlamaSwap.BackendURL))
 	}
+	machine.SetLactClient(newLactClient(cfg))
 	machine.Reconcile()
 
 	server := api.NewServer(machine, logger)
@@ -134,4 +136,13 @@ func main() {
 
 	logger.Info("waiting for any in-flight transitions")
 	machine.Wait()
+}
+
+// newLactClient returns a LACT daemon lifecycle client when the lact feature
+// is enabled in config, or nil when disabled or absent (feature inactive).
+func newLactClient(cfg *config.Config) *lact.Client {
+	if cfg.Lact.Enabled {
+		return lact.New()
+	}
+	return nil
 }

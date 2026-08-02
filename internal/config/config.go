@@ -79,6 +79,10 @@ type PowerConfig struct {
 	Cooldown Duration `yaml:"cooldown"`
 }
 
+type LactConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
 type Config struct {
 	Server        ServerConfig         `yaml:"server"`
 	Shelly        ShellyConfig         `yaml:"shelly"`
@@ -90,6 +94,7 @@ type Config struct {
 	Shutdown      ShutdownConfig       `yaml:"shutdown"`
 	Gateway       GatewayConfig        `yaml:"gateway"`
 	Power         PowerConfig          `yaml:"power"`
+	Lact          LactConfig           `yaml:"lact"`
 }
 
 func Load(path string) (*Config, error) {

@@ -17,6 +17,8 @@ shutdown:
   gpuFreeCheckInterval: 5m
 power:
   cooldown: 0s
+lact:
+  enabled: false
 # auxContainers:
 #   - name: comfyui
 #     container: comfyui

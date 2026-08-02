@@ -88,6 +88,14 @@ type Unbinder interface {
 	Unbind(ctx context.Context) error
 }
 
+// LactController controls the LACT daemon (lactd) lifecycle. Implementations
+// stop/start the systemd service around eGPU unbind/rebind so LACT does not
+// permanently lose GPU detection across power cycles.
+type LactController interface {
+	Stop(ctx context.Context) error
+	Start(ctx context.Context) error
+}
+
 type AuxResult int
 
 const (
@@ -146,6 +154,7 @@ type Machine struct {
 	unbinder Unbinder
 	aux      AuxContainerController
 	unloader ModelUnloader
+	lact     LactController
 	logger   *slog.Logger
 
 	pollInterval         time.Duration
@@ -196,6 +205,12 @@ func (m *Machine) SetAuxContainers(ctrl AuxContainerController) {
 // unload step (used when no backendUrl is configured).
 func (m *Machine) SetModelUnloader(u ModelUnloader) {
 	m.unloader = u
+}
+
+// SetLactClient wires the LACT daemon lifecycle controller used during power
+// transitions. Passing nil disables LACT integration (feature inactive).
+func (m *Machine) SetLactClient(c LactController) {
+	m.lact = c
 }
 
 // Reconcile performs a one-shot startup probe. If the machine is Off and all
@@ -816,6 +831,15 @@ func (m *Machine) startup() {
 	}
 	m.logger.Info("GPU detected")
 
+	// Start the LACT daemon now that the GPU driver is ready so it can detect
+	// the GPU. Non-fatal: startup continues regardless.
+	if m.lact != nil {
+		m.logger.Info("Starting lactd")
+		if err := m.lact.Start(ctx); err != nil {
+			m.logger.Warn("lact start failed", "error", err)
+		}
+	}
+
 	m.logger.Info("Starting llama-swap")
 	if err := m.docker.Start(ctx); err != nil {
 		m.setState(Error, fmt.Errorf("docker start failed: %w", err))
@@ -872,6 +896,18 @@ func (m *Machine) shutdown() {
 			m.setState(Error, fmt.Errorf("aux container stop failed: %w", err))
 			m.logger.Error("Aux container stop failed", "error", err)
 			return
+		}
+	}
+
+	// Phase 1c: stop the LACT daemon before unbinding the eGPU so it does not
+	// lose GPU detection permanently. Non-fatal: shutdown continues regardless.
+	if m.lact != nil {
+		ctx1c, cancel1c := context.WithTimeout(context.Background(), m.shutdownTimeout)
+		defer cancel1c()
+
+		m.logger.Info("Stopping lactd")
+		if err := m.lact.Stop(ctx1c); err != nil {
+			m.logger.Warn("lact stop failed", "error", err)
 		}
 	}
 

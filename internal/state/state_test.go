@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/dockmind/dockmind/internal/lact"
 )
 
 type fakePower struct {
@@ -136,14 +138,16 @@ func (h *recordingHandler) hasRecord(level slog.Level, msgSubstr string) bool {
 }
 
 type fakeDocker struct {
-	mu           sync.Mutex
-	running      bool
-	startErr     error
-	stopErr      error
-	isRunningErr error
-	block        chan struct{} // blocks both Start and Stop until closed
-	stopCalls    int
-	stopCallback func()
+	mu             sync.Mutex
+	running        bool
+	startErr       error
+	stopErr        error
+	isRunningErr   error
+	block          chan struct{} // blocks both Start and Stop until closed
+	stopCalls      int
+	stopCallback   func()
+	startOrder     func() int
+	lastStartOrder int
 }
 
 func (f *fakeDocker) Start(ctx context.Context) error {
@@ -156,6 +160,9 @@ func (f *fakeDocker) Start(ctx context.Context) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.startOrder != nil {
+		f.lastStartOrder = f.startOrder()
+	}
 	if f.startErr != nil {
 		return f.startErr
 	}
@@ -213,12 +220,17 @@ type fakeUnbinder struct {
 	mu        sync.Mutex
 	unbindErr error
 	calls     int
+	order     func() int
+	lastOrder int
 }
 
 func (f *fakeUnbinder) Unbind(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	if f.order != nil {
+		f.lastOrder = f.order()
+	}
 	return f.unbindErr
 }
 
@@ -240,6 +252,37 @@ func (f *fakeUnloader) Unload(ctx context.Context) error {
 		f.lastOrder = f.order()
 	}
 	return f.err
+}
+
+// fakeLact records Stop/Start calls. It satisfies state.LactController.
+type fakeLact struct {
+	mu         sync.Mutex
+	stopCalls  int
+	startCalls int
+	stopErr    error
+	startErr   error
+	order      func() int
+	lastOrder  int
+}
+
+func (f *fakeLact) Stop(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.order != nil {
+		f.lastOrder = f.order()
+	}
+	f.stopCalls++
+	return f.stopErr
+}
+
+func (f *fakeLact) Start(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.order != nil {
+		f.lastOrder = f.order()
+	}
+	f.startCalls++
+	return f.startErr
 }
 
 type fakeAuxController struct {
@@ -2782,6 +2825,256 @@ func TestShutdownNilAuxController(t *testing.T) {
 
 	if m.state != Off {
 		t.Fatalf("expected Off, got %v", m.state)
+	}
+}
+
+func TestSetLactClient(t *testing.T) {
+	m, _, _, _, _, _ := newTestMachine()
+	if m.lact != nil {
+		t.Fatal("expected nil lact by default")
+	}
+
+	c := lact.New()
+	m.SetLactClient(c)
+	if m.lact != c {
+		t.Fatal("expected lact client set")
+	}
+
+	m.SetLactClient(nil)
+	if m.lact != nil {
+		t.Fatal("expected nil lact after SetLactClient(nil)")
+	}
+}
+
+func TestShutdownStopsLactBeforeUnbind(t *testing.T) {
+	var seq int
+	var mu sync.Mutex
+	record := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		seq++
+		return seq
+	}
+
+	m, power, gpu, docker, _, unbinder := newTestMachine()
+	unbinder.order = record
+	lactFake := &fakeLact{order: record}
+	m.SetLactClient(lactFake)
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off, got %v", m.state)
+	}
+	if lactFake.stopCalls != 1 {
+		t.Fatalf("expected lact Stop called once, got %d", lactFake.stopCalls)
+	}
+	if unbinder.calls != 1 {
+		t.Fatalf("expected unbind called once, got %d", unbinder.calls)
+	}
+	if lactFake.lastOrder >= unbinder.lastOrder {
+		t.Fatalf("expected lact Stop (order %d) before unbind (order %d)", lactFake.lastOrder, unbinder.lastOrder)
+	}
+}
+
+func TestShutdownStopsLactBeforeAwaitingGPUFree(t *testing.T) {
+	m, power, gpu, docker, _, _ := newTestMachine()
+	lactFake := &fakeLact{}
+	m.SetLactClient(lactFake)
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+	gpu.processes = []GPUProcess{{PID: 1234, Name: "python"}}
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+
+	for i := 0; i < 100; i++ {
+		if m.State() == AwaitingGPUFree {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	if m.State() != AwaitingGPUFree {
+		t.Fatalf("expected AwaitingGPUFree, got %v", m.State())
+	}
+	if lactFake.stopCalls != 1 {
+		t.Fatalf("expected lact Stop called once before AwaitingGPUFree, got %d", lactFake.stopCalls)
+	}
+
+	gpu.mu.Lock()
+	gpu.processes = []GPUProcess{}
+	gpu.mu.Unlock()
+	m.Wait()
+}
+
+func TestShutdownLactStopErrorContinues(t *testing.T) {
+	m, power, gpu, docker, _, unbinder := newTestMachine()
+	lactFake := &fakeLact{stopErr: errors.New("sudo failed")}
+	m.SetLactClient(lactFake)
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off despite lact stop failure, got %v", m.state)
+	}
+	if m.lastError != nil {
+		t.Fatalf("expected no lastError, got %v", m.lastError)
+	}
+	if power.on {
+		t.Fatalf("expected power off")
+	}
+	if unbinder.calls != 1 {
+		t.Fatalf("expected unbind called once, got %d", unbinder.calls)
+	}
+}
+
+func TestShutdownLactStopErrorLogged(t *testing.T) {
+	m, power, gpu, docker, _, _, handler := newTestMachineWithRecorder()
+	lactFake := &fakeLact{stopErr: errors.New("sudo failed")}
+	m.SetLactClient(lactFake)
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off, got %v", m.state)
+	}
+	if !handler.hasRecord(slog.LevelWarn, "lact stop failed") {
+		t.Fatal("expected WARN log 'lact stop failed'")
+	}
+}
+
+func TestShutdownNilLactNoCall(t *testing.T) {
+	m, power, gpu, docker, _, _ := newTestMachine()
+	m.state = Ready
+	power.on = true
+	gpu.present = true
+	docker.running = true
+
+	if got := m.PowerOff(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Off {
+		t.Fatalf("expected Off, got %v", m.state)
+	}
+}
+
+func TestStartupStartsLactBeforeLlamaSwap(t *testing.T) {
+	var seq int
+	var mu sync.Mutex
+	record := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		seq++
+		return seq
+	}
+
+	m, _, gpu, docker, health, _ := newTestMachine()
+	lactFake := &fakeLact{order: record}
+	m.SetLactClient(lactFake)
+	docker.startOrder = record
+	gpu.present = true
+	health.healthy = true
+
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready, got %v", m.state)
+	}
+	if lactFake.startCalls != 1 {
+		t.Fatalf("expected lact Start called once, got %d", lactFake.startCalls)
+	}
+	if !docker.running {
+		t.Fatalf("expected llama-swap running")
+	}
+	if lactFake.lastOrder >= docker.lastStartOrder {
+		t.Fatalf("expected lact Start (order %d) before llama-swap start (order %d)", lactFake.lastOrder, docker.lastStartOrder)
+	}
+}
+
+func TestStartupLactStartErrorContinues(t *testing.T) {
+	m, _, gpu, docker, health, _ := newTestMachine()
+	lactFake := &fakeLact{startErr: errors.New("sudo failed")}
+	m.SetLactClient(lactFake)
+	gpu.present = true
+	health.healthy = true
+
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready despite lact start failure, got %v", m.state)
+	}
+	if m.lastError != nil {
+		t.Fatalf("expected no lastError, got %v", m.lastError)
+	}
+	if !docker.running {
+		t.Fatalf("expected llama-swap started")
+	}
+}
+
+func TestStartupLactStartErrorLogged(t *testing.T) {
+	m, _, gpu, _, health, _, handler := newTestMachineWithRecorder()
+	lactFake := &fakeLact{startErr: errors.New("sudo failed")}
+	m.SetLactClient(lactFake)
+	gpu.present = true
+	health.healthy = true
+
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready, got %v", m.state)
+	}
+	if !handler.hasRecord(slog.LevelWarn, "lact start failed") {
+		t.Fatal("expected WARN log 'lact start failed'")
+	}
+}
+
+func TestStartupNilLactNoCall(t *testing.T) {
+	m, _, gpu, _, health, _ := newTestMachine()
+	gpu.present = true
+	health.healthy = true
+
+	if got := m.PowerOn(); got != ResultAccepted {
+		t.Fatalf("expected ResultAccepted, got %v", got)
+	}
+	m.Wait()
+
+	if m.state != Ready {
+		t.Fatalf("expected Ready, got %v", m.state)
 	}
 }
 

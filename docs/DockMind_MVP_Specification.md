@@ -309,6 +309,9 @@ shutdown:
 power:
   cooldown: 0s
 
+lact:
+  enabled: false
+
 gateway:
   enabled: false
   modelsRefreshInterval: 60s
