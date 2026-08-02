@@ -34,7 +34,7 @@ sudo cp 61-dockmind-egpu.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-The rule is hardcoded to `ATTRS{device}=="0x2c05"` (RTX 5070 Ti). If your eGPU has a different PCI device ID, update the line in the rules file before installing. The same ID is used by `dockmind-egpu-unbind`, so both need matching values. Find your GPU's device ID with `lspci -n | grep -i vga`.
+The rule is hardcoded to `ATTRS{device}=="0x2c05"` (RTX 5070 Ti). If your eGPU has a different PCI device ID, update the line in the rules file before installing. The same ID is used by `dockmind-egpu-unbind`, so both need matching values. Find your GPU's device ID with `lspci -nn | grep -i vga` (look for the value after the vendor ID, e.g. `[10de:2c05]`).
 
 Build and run:
 
