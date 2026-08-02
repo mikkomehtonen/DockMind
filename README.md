@@ -25,6 +25,7 @@ Prerequisites:
 - `nvidia-smi`
 - A Shelly Plug Gen3 on the LAN
 - A `llama-swap` Docker container already set up on the host
+- The udev rule in `61-dockmind-egpu.rules` installed to prevent GNOME's mutter compositor from using the eGPU. Install it by copying the file to `/etc/udev/rules.d/61-dockmind-egpu.rules` and reloading rules with `sudo udevadm control --reload-rules && sudo udevadm trigger`. Without this rule, mutter may bind to the eGPU and conflict with DockMind's exclusive power management.
 
 Build and run:
 
