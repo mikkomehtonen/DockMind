@@ -140,6 +140,13 @@
       gap: 0.75rem;
     }
 
+    .state__messages {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      min-height: 2.75rem;
+    }
+
     .state__label {
       font-size: var(--fs-sm);
       color: var(--muted);
@@ -543,10 +550,12 @@
         <span class="state__dot" id="state-dot"></span>
         <span class="state__name" id="state-name">Loading…</span>
       </div>
-      <p class="state__feedback" id="feedback" hidden></p>
-      <p class="state__cooldown" id="cooldown" hidden>Cooldown active — <span id="cooldown-time">0</span>s remaining</p>
-      <p class="state__idle" id="idle" hidden>Auto-shutdown in <span id="idle-time">0</span></p>
-      <p class="state__idle state__idle-paused" id="idle-paused" hidden>Auto-shutdown paused</p>
+      <div class="state__messages">
+        <p class="state__feedback" id="feedback" hidden></p>
+        <p class="state__cooldown" id="cooldown" hidden>Cooldown active — <span id="cooldown-time">0</span>s remaining</p>
+        <p class="state__idle" id="idle" hidden>Auto-shutdown in <span id="idle-time">0</span></p>
+        <p class="state__idle state__idle-paused" id="idle-paused" hidden>Auto-shutdown paused</p>
+      </div>
     </section>
 
     <section class="actions">
