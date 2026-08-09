@@ -581,11 +581,6 @@
         <span class="component__label">llama-swap</span>
         <span class="component__value" id="swap-value">—</span>
       </div>
-      <div class="component">
-        <span class="component__dot" id="health-dot"></span>
-        <span class="component__label">llama-swap health</span>
-        <span class="component__value" id="health-value">—</span>
-      </div>
     </section>
 
     <section class="aux" id="aux-card" hidden>
@@ -657,8 +652,6 @@
       shellyValue: document.getElementById("shelly-value"),
       swapDot: document.getElementById("swap-dot"),
       swapValue: document.getElementById("swap-value"),
-      healthDot: document.getElementById("health-dot"),
-      healthValue: document.getElementById("health-value"),
       errorBanner: document.getElementById("error-banner"),
       errorMessage: document.getElementById("error-message"),
       gpuProcsBanner: document.getElementById("gpu-procs-banner"),
@@ -756,22 +749,20 @@
       els.shellyValue.textContent = data.shellyOn ? "On" : "Off";
       setComponentDot(els.shellyDot, data.shellyOn);
 
-      els.swapValue.textContent = data.llamaSwapRunning ? "Running" : "Stopped";
-      setComponentDot(els.swapDot, data.llamaSwapRunning);
-
+      // llama-swap consolidated status
       if (!data.llamaSwapRunning) {
-        els.healthValue.textContent = "Stopped";
-        els.healthDot.className = "component__dot";
+        els.swapValue.textContent = "Stopped";
+        els.swapDot.className = "component__dot";
       } else if (data.llamaSwapHealthy) {
         if (data.loadedModels && data.loadedModels.length > 0) {
-          els.healthValue.textContent = data.loadedModels.join(", ");
+          els.swapValue.textContent = data.loadedModels.join(", ");
         } else {
-          els.healthValue.textContent = "Healthy";
+          els.swapValue.textContent = "Healthy";
         }
-        els.healthDot.className = "component__dot is-on";
+        els.swapDot.className = "component__dot is-on";
       } else {
-        els.healthValue.textContent = "Unhealthy";
-        els.healthDot.className = "component__dot is-danger";
+        els.swapValue.textContent = "Unhealthy";
+        els.swapDot.className = "component__dot is-danger";
       }
 
       if (data.lastError) {

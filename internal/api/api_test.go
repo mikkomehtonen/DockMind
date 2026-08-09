@@ -844,7 +844,6 @@ func TestWebUIRoutes(t *testing.T) {
 			"/docs",
 			"fetch",
 			"setInterval",
-			"llama-swap health",
 			"component__dot.is-danger",
 			"/favicon.svg",
 			"app__logo",
@@ -981,7 +980,7 @@ func TestComponentsCardOrder(t *testing.T) {
 	}
 
 	body := rec.Body.String()
-	for _, id := range []string{`id="gpu-dot"`, `id="shelly-dot"`, `id="swap-dot"`, `id="health-dot"`} {
+	for _, id := range []string{`id="gpu-dot"`, `id="shelly-dot"`, `id="swap-dot"`} {
 		if strings.Count(body, id) != 1 {
 			t.Fatalf("expected %q to appear exactly once, got %d", id, strings.Count(body, id))
 		}
