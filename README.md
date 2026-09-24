@@ -234,7 +234,8 @@ shows an auto-shutdown countdown. The countdown is hidden when the state is not
     "total": "16311 MiB",
     "used": "12742 MiB",
     "free": "3108 MiB",
-    "utilization": "24 %"
+    "utilization": "24 %",
+    "temperature": "54"
   },
   "lastError": null,
   "cooldownRemaining": 0,

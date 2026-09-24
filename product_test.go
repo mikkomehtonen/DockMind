@@ -70,6 +70,9 @@ func TestProductDoc(t *testing.T) {
 	if !strings.Contains(body, "030-idle-shutdown-toggle") {
 		t.Error("docs/product.md Features list does not reference the 030-idle-shutdown-toggle story")
 	}
+	if !strings.Contains(body, "031-add-gpu-temperature") {
+		t.Error("docs/product.md Features list does not reference the 031-add-gpu-temperature story")
+	}
 	if strings.Contains(body, "Web UI, Prometheus metrics, or request queuing during startup") {
 		t.Error("docs/product.md still lists Web UI as a non-goal")
 	}

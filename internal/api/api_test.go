@@ -505,7 +505,7 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected gpuMemory.properties to be an object")
 		}
-		for _, field := range []string{"total", "used", "free", "utilization"} {
+		for _, field := range []string{"total", "used", "free", "utilization", "temperature"} {
 			if _, ok := memProps[field]; !ok {
 				t.Fatalf("expected gpuMemory.properties to contain %q", field)
 			}
@@ -965,6 +965,16 @@ func TestWebUIRoutes(t *testing.T) {
 			"gpu-procs__util-fill",
 			"gpuMemory.utilization",
 			"Utilization:",
+			"id=\"gpu-procs-temp\"",
+			"gpu-procs__temp-bar",
+			"gpu-procs__temp-fill",
+			"gpu-procs__temp-fill--ok",
+			"gpu-procs__temp-fill--warn",
+			"gpu-procs__temp-fill--crit",
+			"gpuMemory.temperature",
+			"Temperature:",
+			"TEMP_WARN_C",
+			"TEMP_CRIT_C",
 		} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("expected body to contain %q, got %q", want, body)

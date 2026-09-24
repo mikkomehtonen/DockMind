@@ -66,6 +66,7 @@ type GPUMemory struct {
 	Used        string `json:"used"`
 	Free        string `json:"free"`
 	Utilization string `json:"utilization"`
+	Temperature string `json:"temperature"`
 }
 
 type GPUMonitor interface {

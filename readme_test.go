@@ -58,6 +58,7 @@ func TestREADME(t *testing.T) {
 		{"status example includes usedGpuMemory field", "usedGpuMemory", true},
 		{"status example includes gpuMemory field", "gpuMemory", true},
 		{"status example includes utilization field", "utilization", true},
+		{"status example includes temperature field", "temperature", true},
 		{"status example includes auxContainers field", "auxContainers", true},
 		{"status example includes idleShutdownBlocked field", "idleShutdownBlocked", true},
 		{"documents disableIdleShutdown config", "disableIdleShutdown", true},

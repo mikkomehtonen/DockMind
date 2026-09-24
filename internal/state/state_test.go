@@ -2130,7 +2130,7 @@ func TestStatusIncludesGPUProcesses(t *testing.T) {
 			state:        Ready,
 			gpuPresent:   true,
 			processes:    []GPUProcess{{PID: 1, Name: "a", UsedGPUMemory: "1 MiB"}, {PID: 2, Name: "b", UsedGPUMemory: "2 MiB"}},
-			memory:       GPUMemory{Total: "16 MiB", Used: "3 MiB", Free: "13 MiB"},
+			memory:       GPUMemory{Total: "16 MiB", Used: "3 MiB", Free: "13 MiB", Temperature: "54"},
 			wantCount:    2,
 			wantState:    "Ready",
 			wantNonEmpty: true,
@@ -2151,7 +2151,7 @@ func TestStatusIncludesGPUProcesses(t *testing.T) {
 			state:        AwaitingGPUFree,
 			gpuPresent:   true,
 			processes:    []GPUProcess{{PID: 42, Name: "blocker", UsedGPUMemory: "5 MiB"}},
-			memory:       GPUMemory{Total: "16 MiB", Used: "5 MiB", Free: "11 MiB"},
+			memory:       GPUMemory{Total: "16 MiB", Used: "5 MiB", Free: "11 MiB", Temperature: "54"},
 			wantCount:    1,
 			wantState:    "AwaitingGPUFree",
 			wantNonEmpty: true,
@@ -2162,7 +2162,7 @@ func TestStatusIncludesGPUProcesses(t *testing.T) {
 			state:        Ready,
 			gpuPresent:   true,
 			processes:    []GPUProcess{},
-			memory:       GPUMemory{Total: "16 MiB", Used: "0 MiB", Free: "16 MiB", Utilization: "0 %"},
+			memory:       GPUMemory{Total: "16 MiB", Used: "0 MiB", Free: "16 MiB", Utilization: "0 %", Temperature: "39"},
 			wantCount:    0,
 			wantState:    "Ready",
 			wantNonEmpty: true,
@@ -2193,7 +2193,7 @@ func TestStatusIncludesGPUProcesses(t *testing.T) {
 					t.Fatalf("expected gpuMemory %+v, got %+v", tc.memory, status.GPUMemory)
 				}
 			} else {
-				if status.GPUMemory.Total != "" || status.GPUMemory.Used != "" || status.GPUMemory.Free != "" || status.GPUMemory.Utilization != "" {
+				if status.GPUMemory.Total != "" || status.GPUMemory.Used != "" || status.GPUMemory.Free != "" || status.GPUMemory.Utilization != "" || status.GPUMemory.Temperature != "" {
 					t.Fatalf("expected empty gpuMemory, got %+v", status.GPUMemory)
 				}
 			}
@@ -2212,7 +2212,7 @@ func TestStatusGPUMemoryProbeFailure(t *testing.T) {
 	if len(status.GPUProcesses) != 1 {
 		t.Fatalf("expected 1 gpuProcess, got %d", len(status.GPUProcesses))
 	}
-	if status.GPUMemory.Total != "" || status.GPUMemory.Used != "" || status.GPUMemory.Free != "" || status.GPUMemory.Utilization != "" {
+	if status.GPUMemory.Total != "" || status.GPUMemory.Used != "" || status.GPUMemory.Free != "" || status.GPUMemory.Utilization != "" || status.GPUMemory.Temperature != "" {
 		t.Fatalf("expected empty gpuMemory on probe failure, got %+v", status.GPUMemory)
 	}
 	if !gpu.memoryChecked {
@@ -2240,8 +2240,8 @@ func TestStatusGPUMemoryProbedWhenGPUPresent(t *testing.T) {
 			state:      Ready,
 			gpuPresent: true,
 			processes:  []GPUProcess{},
-			memory:     GPUMemory{Total: "16 MiB", Used: "0 MiB", Free: "16 MiB", Utilization: "0 %"},
-			wantMemory: GPUMemory{Total: "16 MiB", Used: "0 MiB", Free: "16 MiB", Utilization: "0 %"},
+			memory:     GPUMemory{Total: "16 MiB", Used: "0 MiB", Free: "16 MiB", Utilization: "0 %", Temperature: "39"},
+			wantMemory: GPUMemory{Total: "16 MiB", Used: "0 MiB", Free: "16 MiB", Utilization: "0 %", Temperature: "39"},
 			wantCount:  0,
 			wantLog:    false,
 		},
@@ -2250,8 +2250,8 @@ func TestStatusGPUMemoryProbedWhenGPUPresent(t *testing.T) {
 			state:      Ready,
 			gpuPresent: true,
 			processes:  []GPUProcess{{PID: 1, Name: "a"}, {PID: 2, Name: "b"}},
-			memory:     GPUMemory{Total: "16 MiB", Used: "8 MiB", Free: "8 MiB", Utilization: "24 %"},
-			wantMemory: GPUMemory{Total: "16 MiB", Used: "8 MiB", Free: "8 MiB", Utilization: "24 %"},
+			memory:     GPUMemory{Total: "16 MiB", Used: "8 MiB", Free: "8 MiB", Utilization: "24 %", Temperature: "54"},
+			wantMemory: GPUMemory{Total: "16 MiB", Used: "8 MiB", Free: "8 MiB", Utilization: "24 %", Temperature: "54"},
 			wantCount:  2,
 			wantLog:    false,
 		},

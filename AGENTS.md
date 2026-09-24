@@ -70,6 +70,7 @@ Loaded via `--config` (default `./config.yaml`). Required: `shelly.address`, `do
 - Reviewer reports (`peck code-review`, `peck acceptance-review`) are committed to the branch as commits — expect them in `git log`.
 - `.opencode/` is workspace config and is gitignored — never commit it.
 - Acceptance tests must assert the exact contract in the story's AC matrix, not the implementation's natural behavior.
+- A story's "Tests to extend" list (Technical Context) is a mandatory checklist — verify every listed test location was actually extended before the first reviewer run. Editing one anchor list while a sibling one in the same file is listed separately is an easy miss (story 031).
 - Code review expects `context.Context` propagation, bounded HTTP client timeouts, and error logging (not swallowing) by default.
 
 ## Key docs

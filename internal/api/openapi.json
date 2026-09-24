@@ -276,9 +276,10 @@
               "total": { "type": "string", "description": "Total GPU memory as reported by nvidia-smi (e.g. '16311 MiB')." },
               "used": { "type": "string", "description": "Used GPU memory as reported by nvidia-smi (e.g. '12742 MiB')." },
               "free": { "type": "string", "description": "Free GPU memory as reported by nvidia-smi (e.g. '3108 MiB')." },
-              "utilization": { "type": "string", "description": "GPU utilization as reported by nvidia-smi (e.g. '24 %'). Empty string when the GPU is absent or the probe fails." }
+              "utilization": { "type": "string", "description": "GPU utilization as reported by nvidia-smi (e.g. '24 %'). Empty string when the GPU is absent or the probe fails." },
+              "temperature": { "type": "string", "description": "GPU temperature as reported by nvidia-smi (e.g. '54'). Bare integer with no unit; the web UI appends °C. Empty string when the GPU is absent or the probe fails." }
             },
-            "description": "Overall GPU memory usage and utilization. Empty strings when the GPU is absent or the probe fails."
+            "description": "Overall GPU memory usage, utilization, and temperature. Empty strings when the GPU is absent or the probe fails."
           },
           "lastError": {
             "type": "string",
