@@ -34,6 +34,31 @@ func (f *fakeIdleReporter) IdleShutdownBlocked() bool {
 	return f.idleShutdownBlocked
 }
 
+// fakeIdleShutdownController implements IdleShutdownController for testing.
+// When available is false, SetIdleShutdownEnabled reports not applicable.
+type fakeIdleShutdownController struct {
+	available bool
+	enabled   bool
+	setCalls  []bool
+}
+
+func (f *fakeIdleShutdownController) IdleShutdownEnabled() bool {
+	return f.enabled
+}
+
+func (f *fakeIdleShutdownController) IdleShutdownAvailable() bool {
+	return f.available
+}
+
+func (f *fakeIdleShutdownController) SetIdleShutdownEnabled(enabled bool) bool {
+	f.setCalls = append(f.setCalls, enabled)
+	if !f.available {
+		return false
+	}
+	f.enabled = enabled
+	return true
+}
+
 func (f *fakeStateMachine) Status() state.StatusResponse {
 	return f.status
 }
@@ -408,7 +433,7 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected paths to be an object")
 		}
-		for _, p := range []string{"/status", "/power/on", "/power/off", "/restart", "/health", "/containers/{name}/start", "/containers/{name}/stop", "/v1/models", "/v1/chat/completions"} {
+		for _, p := range []string{"/status", "/power/on", "/power/off", "/restart", "/health", "/containers/{name}/start", "/containers/{name}/stop", "/v1/models", "/v1/chat/completions", "/idle-shutdown/enable", "/idle-shutdown/disable"} {
 			if _, ok := paths[p]; !ok {
 				t.Fatalf("expected paths to contain %q", p)
 			}
@@ -430,7 +455,7 @@ func TestSwaggerRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected components.schemas.StatusResponse.properties to be an object")
 		}
-		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "gpuProcesses", "gpuMemory", "lastError", "cooldownRemaining", "idleRemaining", "idleShutdownBlocked", "auxContainers"} {
+		for _, field := range []string{"state", "gpuPresent", "gpuName", "shellyOn", "llamaSwapRunning", "llamaSwapHealthy", "loadedModels", "gpuProcesses", "gpuMemory", "lastError", "cooldownRemaining", "idleRemaining", "idleShutdownEnabled", "idleShutdownAvailable", "idleShutdownBlocked", "auxContainers"} {
 			if _, ok := properties[field]; !ok {
 				t.Fatalf("expected StatusResponse properties to contain %q", field)
 			}
@@ -687,6 +712,65 @@ func TestWebUIAuxIdleShutdownBlocking(t *testing.T) {
 	}
 	if pausedIdx > idleIdx {
 		t.Fatalf("expected paused indicator to precede idle countdown")
+	}
+}
+
+func TestWebUIIdleShutdownToggle(t *testing.T) {
+	server := NewServer(&fakeStateMachine{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		// Always-visible toggle control in the idle row.
+		`id="idle-shutdown-toggle"`,
+		`class="idle-toggle__box"`,
+		`Automatic idle shutdown`,
+		`Idle auto-shutdown off`,
+		// n/a hint, hidden by default.
+		`id="idle-shutdown-hint"`,
+		`>n/a<`,
+		// Render logic driven by the /status fields.
+		`els.idleToggle.checked = !!data.idleShutdownEnabled`,
+		`els.idleToggle.disabled = !data.idleShutdownAvailable`,
+		`els.idleToggleHint.hidden = !!data.idleShutdownAvailable`,
+		// Toggle actions POST to the runtime endpoints.
+		`"/idle-shutdown/enable"`,
+		`"/idle-shutdown/disable"`,
+		`els.idleToggle.addEventListener("change"`,
+		// 409 (not applicable) feedback mapping in the toggle handler.
+		`showFeedback("Idle auto-shutdown not available")`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected body to contain %q", want)
+		}
+	}
+
+	// The toggle container must be static (always present), not hidden by
+	// default. The n/a hint, in contrast, starts hidden.
+	if !strings.Contains(body, `<div class="state__idle-toggle">`) {
+		t.Fatalf("expected body to contain <div class=\"state__idle-toggle\">")
+	}
+	if strings.Contains(body, `state__idle-toggle" hidden`) {
+		t.Fatalf("toggle row must not be hidden by default")
+	}
+	if !strings.Contains(body, `id="idle-shutdown-hint" hidden`) {
+		t.Fatalf("expected n/a hint to be hidden by default")
+	}
+	if !strings.Contains(body, `id="idle-off" hidden`) {
+		t.Fatalf("expected idle-off indicator to be hidden by default")
+	}
+
+	// The unavailable branch must precede the blocked branch so a gateway
+	// without an idle timeout never shows paused/off states.
+	availIdx := strings.Index(body, `if (!data.idleShutdownAvailable)`)
+	blockedIdx := strings.Index(body, `} else if (data.idleShutdownBlocked)`)
+	if availIdx == -1 || blockedIdx == -1 {
+		t.Fatalf("expected both unavailable and blocked branches in body")
+	}
+	if availIdx > blockedIdx {
+		t.Fatalf("expected unavailable branch to precede blocked branch")
 	}
 }
 
@@ -1180,6 +1264,258 @@ func TestIdleReporter(t *testing.T) {
 		body := rec.Body.String()
 		if !strings.Contains(body, `"idleShutdownBlocked":false`) {
 			t.Fatalf("expected body to contain \"idleShutdownBlocked\":false, got %q", body)
+		}
+	})
+}
+
+func TestIdleShutdownToggleRoutes(t *testing.T) {
+	t.Run("POST /idle-shutdown/enable OK", func(t *testing.T) {
+		ctrl := &fakeIdleShutdownController{available: true, enabled: false}
+		server := NewServer(&fakeStateMachine{status: state.StatusResponse{State: "Ready"}}, nil)
+		server.SetIdleShutdownController(ctrl)
+
+		req := httptest.NewRequest(http.MethodPost, "/idle-shutdown/enable", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		if rec.Body.String() != "" {
+			t.Fatalf("expected empty body, got %q", rec.Body.String())
+		}
+		if !ctrl.enabled {
+			t.Error("expected the controller to enable idle shutdown")
+		}
+		// A subsequent GET /status reports the new state.
+		statusReq := httptest.NewRequest(http.MethodGet, "/status", nil)
+		statusRec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(statusRec, statusReq)
+		if !strings.Contains(statusRec.Body.String(), `"idleShutdownEnabled":true`) {
+			t.Fatalf("expected subsequent /status to report idleShutdownEnabled true, got %q", statusRec.Body.String())
+		}
+	})
+
+	t.Run("POST /idle-shutdown/disable OK", func(t *testing.T) {
+		ctrl := &fakeIdleShutdownController{available: true, enabled: true}
+		server := NewServer(&fakeStateMachine{status: state.StatusResponse{State: "Ready"}}, nil)
+		server.SetIdleShutdownController(ctrl)
+
+		req := httptest.NewRequest(http.MethodPost, "/idle-shutdown/disable", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		if rec.Body.String() != "" {
+			t.Fatalf("expected empty body, got %q", rec.Body.String())
+		}
+		if ctrl.enabled {
+			t.Error("expected the controller to disable idle shutdown")
+		}
+		// A subsequent GET /status reports the new state.
+		statusReq := httptest.NewRequest(http.MethodGet, "/status", nil)
+		statusRec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(statusRec, statusReq)
+		if !strings.Contains(statusRec.Body.String(), `"idleShutdownEnabled":false`) {
+			t.Fatalf("expected subsequent /status to report idleShutdownEnabled false, got %q", statusRec.Body.String())
+		}
+	})
+
+	t.Run("manual power off unaffected while toggle disabled", func(t *testing.T) {
+		ctrl := &fakeIdleShutdownController{available: true, enabled: false}
+		machine := &fakeStateMachine{
+			status:   state.StatusResponse{State: "Ready"},
+			powerOff: state.ResultAccepted,
+		}
+		server := NewServer(machine, nil)
+		server.SetIdleShutdownController(ctrl)
+
+		req := httptest.NewRequest(http.MethodPost, "/power/off", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("expected status %d, got %d", http.StatusAccepted, rec.Code)
+		}
+		if ctrl.enabled {
+			t.Error("expected the toggle to remain disabled after manual power off")
+		}
+	})
+
+	t.Run("POST /idle-shutdown/enable not applicable is 409", func(t *testing.T) {
+		ctrl := &fakeIdleShutdownController{available: false}
+		server := NewServer(&fakeStateMachine{}, nil)
+		server.SetIdleShutdownController(ctrl)
+
+		req := httptest.NewRequest(http.MethodPost, "/idle-shutdown/enable", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("expected status %d, got %d", http.StatusConflict, rec.Code)
+		}
+		if rec.Body.String() != "" {
+			t.Fatalf("expected empty body, got %q", rec.Body.String())
+		}
+		if ctrl.enabled {
+			t.Error("expected the controller to remain unchanged when not applicable")
+		}
+	})
+
+	t.Run("POST /idle-shutdown/disable not applicable is 409", func(t *testing.T) {
+		ctrl := &fakeIdleShutdownController{available: false}
+		server := NewServer(&fakeStateMachine{}, nil)
+		server.SetIdleShutdownController(ctrl)
+
+		req := httptest.NewRequest(http.MethodPost, "/idle-shutdown/disable", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("expected status %d, got %d", http.StatusConflict, rec.Code)
+		}
+		if rec.Body.String() != "" {
+			t.Fatalf("expected empty body, got %q", rec.Body.String())
+		}
+		if ctrl.enabled {
+			t.Error("expected the controller to remain unchanged when not applicable")
+		}
+	})
+
+	t.Run("no controller wired is 409", func(t *testing.T) {
+		server := NewServer(&fakeStateMachine{}, nil)
+
+		req := httptest.NewRequest(http.MethodPost, "/idle-shutdown/enable", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("expected status %d, got %d", http.StatusConflict, rec.Code)
+		}
+		if rec.Body.String() != "" {
+			t.Fatalf("expected empty body, got %q", rec.Body.String())
+		}
+	})
+
+	t.Run("POST /idle-shutdown/disable no controller wired is 409", func(t *testing.T) {
+		server := NewServer(&fakeStateMachine{}, nil)
+
+		req := httptest.NewRequest(http.MethodPost, "/idle-shutdown/disable", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("expected status %d, got %d", http.StatusConflict, rec.Code)
+		}
+		if rec.Body.String() != "" {
+			t.Fatalf("expected empty body, got %q", rec.Body.String())
+		}
+	})
+
+	t.Run("POST /idle-shutdown/enable idempotent when already enabled", func(t *testing.T) {
+		ctrl := &fakeIdleShutdownController{available: true, enabled: true}
+		server := NewServer(&fakeStateMachine{}, nil)
+		server.SetIdleShutdownController(ctrl)
+
+		req := httptest.NewRequest(http.MethodPost, "/idle-shutdown/enable", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+	})
+
+	t.Run("POST /idle-shutdown/disable idempotent when already disabled", func(t *testing.T) {
+		ctrl := &fakeIdleShutdownController{available: true, enabled: false}
+		server := NewServer(&fakeStateMachine{}, nil)
+		server.SetIdleShutdownController(ctrl)
+
+		req := httptest.NewRequest(http.MethodPost, "/idle-shutdown/disable", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+	})
+
+	t.Run("GET /idle-shutdown/enable wrong method", func(t *testing.T) {
+		ctrl := &fakeIdleShutdownController{available: true}
+		server := NewServer(&fakeStateMachine{}, nil)
+		server.SetIdleShutdownController(ctrl)
+
+		req := httptest.NewRequest(http.MethodGet, "/idle-shutdown/enable", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, rec.Code)
+		}
+		if len(ctrl.setCalls) != 0 {
+			t.Error("expected no SetIdleShutdownEnabled call for a wrong-method request")
+		}
+	})
+}
+
+func TestIdleShutdownToggleStatus(t *testing.T) {
+	t.Run("controller toggle fields are merged", func(t *testing.T) {
+		fake := &fakeStateMachine{status: state.StatusResponse{State: "Ready"}}
+		server := NewServer(fake, nil)
+		server.SetIdleReporter(&fakeIdleReporter{value: 30.0})
+		server.SetIdleShutdownController(&fakeIdleShutdownController{available: true, enabled: true})
+
+		req := httptest.NewRequest(http.MethodGet, "/status", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		body := rec.Body.String()
+		if !strings.Contains(body, `"idleShutdownEnabled":true`) {
+			t.Fatalf("expected body to contain \"idleShutdownEnabled\":true, got %q", body)
+		}
+		if !strings.Contains(body, `"idleShutdownAvailable":true`) {
+			t.Fatalf("expected body to contain \"idleShutdownAvailable\":true, got %q", body)
+		}
+		if !strings.Contains(body, `"idleRemaining":30`) {
+			t.Fatalf("expected body to contain \"idleRemaining\":30, got %q", body)
+		}
+	})
+
+	t.Run("no controller defaults toggle fields to false", func(t *testing.T) {
+		fake := &fakeStateMachine{status: state.StatusResponse{State: "Ready"}}
+		server := NewServer(fake, nil)
+		server.SetIdleReporter(&fakeIdleReporter{value: 30.0})
+
+		req := httptest.NewRequest(http.MethodGet, "/status", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		body := rec.Body.String()
+		if !strings.Contains(body, `"idleShutdownEnabled":false`) {
+			t.Fatalf("expected body to contain \"idleShutdownEnabled\":false, got %q", body)
+		}
+		if !strings.Contains(body, `"idleShutdownAvailable":false`) {
+			t.Fatalf("expected body to contain \"idleShutdownAvailable\":false, got %q", body)
+		}
+	})
+
+	t.Run("disabled toggle reports idleShutdownEnabled false", func(t *testing.T) {
+		fake := &fakeStateMachine{status: state.StatusResponse{State: "Ready"}}
+		server := NewServer(fake, nil)
+		server.SetIdleShutdownController(&fakeIdleShutdownController{available: true, enabled: false})
+
+		req := httptest.NewRequest(http.MethodGet, "/status", nil)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		body := rec.Body.String()
+		if !strings.Contains(body, `"idleShutdownEnabled":false`) {
+			t.Fatalf("expected body to contain \"idleShutdownEnabled\":false, got %q", body)
+		}
+		if !strings.Contains(body, `"idleShutdownAvailable":true`) {
+			t.Fatalf("expected body to contain \"idleShutdownAvailable\":true, got %q", body)
 		}
 	})
 }

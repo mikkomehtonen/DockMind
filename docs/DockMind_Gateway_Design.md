@@ -963,6 +963,55 @@ restart cycle. This is simpler than cancelling an in-progress shutdown (which
 would require modifying the state machine's transition logic to interrupt a
 running goroutine and roll back partial state changes).
 
+### Runtime toggle
+
+The idle auto-shutdown watcher can be toggled on and off at runtime (story
+030). This lets a user keep the eGPU powered on while it is idle — for example
+during manual observation or a long interactive session — without changing
+configuration or restarting the daemon.
+
+- **Storage**: an in-memory `idleShutdownEnabled atomic.Bool` on the
+  `Gateway` struct. It is **not** persisted and **not** part of the config
+  file; it defaults to `true` (set in `NewGateway`).
+- **Availability**: the toggle only applies when the gateway has a non-zero
+  `idleTimeout`. `IdleShutdownAvailable()` reports `idleTimeout > 0`; when
+  false, there is nothing to toggle (auto-shutdown never runs).
+- **Setting the toggle**: `SetIdleShutdownEnabled(enabled bool) bool` returns
+  `false` when the toggle is not applicable (`idleTimeout <= 0`). On a
+  false→true transition it resets `lastActivity = time.Now()` and clears any
+  pending `pendingShutdown` reservation under `activeMu`, so re-enabling
+  restarts the idle countdown from zero rather than shutting down immediately
+  on the next tick — even when the disable→enable happens within a single
+  poll interval and no tick runs in between.
+- **Re-arming on eGPU start**: on the watcher's Ready edge (any
+  non-Ready→Ready transition), the toggle is forced back to `true`. A
+  disabled toggle therefore never survives a power cycle — after the eGPU is
+  powered on again, idle auto-shutdown is active by default.
+- **Watcher gating**: while disabled, each tick clears `pendingShutdown` and
+  resets `lastActivity`, then returns early — no idle calculation and no
+  shutdown reservation. This also cancels a Phase 1 reservation made just
+  before the toggle was disabled.
+- **Status reporting**: `IdleRemaining()` returns `0` when the toggle is
+  disabled (as well as when unavailable, not `Ready`, `active > 0`, or a
+  shutdown is pending). `GET /status` exposes `idleShutdownEnabled` and
+  `idleShutdownAvailable` so clients can render the control state.
+- **API**: `POST /idle-shutdown/enable` and `POST /idle-shutdown/disable`
+  return `200 OK` with an empty body on success, or `409 Conflict` when the
+  toggle is not applicable (no gateway idle timeout) or no controller is
+  wired. Both endpoints are idempotent — setting the already-active state
+  still returns `200`.
+- **Web UI**: the existing web panel shows an always-visible checkbox in the
+  idle row. It is disabled with an `n/a` hint when `idleShutdownAvailable` is
+  false, shows "Idle auto-shutdown off" when the toggle is disabled, and
+  updates from the existing 1-second `/status` poll. Toggling it POSTs to the
+  endpoint above.
+- **Scope**: the toggle only gates the idle auto-shutdown watcher. It does
+  not affect the gateway's auto-startup via `EnsureReady`, manual power
+  operations, or the per-container `disableIdleShutdown` pause (story 026).
+  All of those compose with it: the watcher shuts the system down only when
+  the toggle is enabled, no container is pausing it, no request is in flight,
+  and the idle timeout has elapsed.
+
 ## Synchronization
 
 Each primitive and its justification:

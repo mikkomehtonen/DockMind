@@ -85,6 +85,34 @@
         }
       }
     },
+    "/idle-shutdown/enable": {
+      "post": {
+        "summary": "Enable idle auto-shutdown",
+        "description": "Re-enables the idle auto-shutdown watcher. The idle countdown restarts from zero. Idempotent — enabling while already enabled still returns 200. Returns 409 when the gateway has no idle timeout configured (nothing to enable) or no gateway is enabled.",
+        "responses": {
+          "200": {
+            "description": "Idle auto-shutdown enabled"
+          },
+          "409": {
+            "description": "Not applicable — the gateway has no idle timeout configured, or no gateway is enabled"
+          }
+        }
+      }
+    },
+    "/idle-shutdown/disable": {
+      "post": {
+        "summary": "Disable idle auto-shutdown",
+        "description": "Disables the idle auto-shutdown watcher so the eGPU stays powered on while idle. The toggle re-enables automatically on the next eGPU start. Idempotent — disabling while already disabled still returns 200. Returns 409 when the gateway has no idle timeout configured (nothing to disable) or no gateway is enabled.",
+        "responses": {
+          "200": {
+            "description": "Idle auto-shutdown disabled"
+          },
+          "409": {
+            "description": "Not applicable — the gateway has no idle timeout configured, or no gateway is enabled"
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "summary": "DockMind daemon health (not GPU readiness)",
@@ -262,7 +290,15 @@
           },
           "idleRemaining": {
             "type": "number",
-            "description": "Remaining seconds before an idle auto-shutdown. 0 when the gateway is disabled, idleTimeout is 0, the state is not Ready, or a request is in flight."
+            "description": "Remaining seconds before an idle auto-shutdown. 0 when the gateway is disabled, idleTimeout is 0, the state is not Ready, a request is in flight, or idle auto-shutdown is disabled."
+          },
+          "idleShutdownEnabled": {
+            "type": "boolean",
+            "description": "True when idle auto-shutdown is currently enabled via the runtime toggle (default true). Only meaningful when idleShutdownAvailable is true; false when no gateway is enabled."
+          },
+          "idleShutdownAvailable": {
+            "type": "boolean",
+            "description": "True when the idle auto-shutdown toggle is applicable, i.e. the gateway has a non-zero idle timeout. When false, the toggle is not available and idle auto-shutdown never runs."
           },
           "idleShutdownBlocked": {
             "type": "boolean",

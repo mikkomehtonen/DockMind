@@ -576,6 +576,328 @@ func TestIdleShutdown_Disabled(t *testing.T) {
 	}
 }
 
+func TestIdleShutdownToggle_DefaultEnabled(t *testing.T) {
+	cases := []struct {
+		name        string
+		idleTimeout time.Duration
+	}{
+		{"with idle timeout", 50 * time.Millisecond},
+		{"without idle timeout", 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := newFakeController()
+			gw, err := NewGateway(
+				"http://localhost:99999", tc.idleTimeout, 2*time.Second, ctrl, slog.Default(),
+			)
+			if err != nil {
+				t.Fatalf("NewGateway: %v", err)
+			}
+			if !gw.IdleShutdownEnabled() {
+				t.Error("expected the idle shutdown toggle to be enabled by default")
+			}
+		})
+	}
+}
+
+func TestIdleShutdownToggle_Available(t *testing.T) {
+	ctrl := newFakeController()
+
+	gw, err := NewGateway("http://localhost:99999", 50*time.Millisecond, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if !gw.IdleShutdownAvailable() {
+		t.Error("expected the toggle to be available when idleTimeout > 0")
+	}
+
+	gw0, err := NewGateway("http://localhost:99999", 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if gw0.IdleShutdownAvailable() {
+		t.Error("expected the toggle to be unavailable when idleTimeout == 0")
+	}
+}
+
+func TestSetIdleShutdownEnabled_NotApplicableWhenNoTimeout(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGateway("http://localhost:99999", 0, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if gw.SetIdleShutdownEnabled(false) {
+		t.Error("expected SetIdleShutdownEnabled(false) to return false when idleTimeout == 0")
+	}
+	if gw.SetIdleShutdownEnabled(true) {
+		t.Error("expected SetIdleShutdownEnabled(true) to return false when idleTimeout == 0")
+	}
+}
+
+func TestSetIdleShutdownEnabled_Toggle(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGateway("http://localhost:99999", 50*time.Millisecond, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if !gw.SetIdleShutdownEnabled(false) {
+		t.Fatal("expected SetIdleShutdownEnabled(false) to return true")
+	}
+	if gw.IdleShutdownEnabled() {
+		t.Error("expected the toggle to be disabled after SetIdleShutdownEnabled(false)")
+	}
+	if !gw.SetIdleShutdownEnabled(true) {
+		t.Fatal("expected SetIdleShutdownEnabled(true) to return true")
+	}
+	if !gw.IdleShutdownEnabled() {
+		t.Error("expected the toggle to be enabled after SetIdleShutdownEnabled(true)")
+	}
+}
+
+func TestIdleShutdown_ToggleDisabledPreventsShutdown(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.StartIdleWatcher(context.Background())
+	defer gw.StopIdleWatcher()
+
+	time.Sleep(30 * time.Millisecond) // let the watcher initialize
+
+	if !gw.SetIdleShutdownEnabled(false) {
+		t.Fatal("expected SetIdleShutdownEnabled(false) to return true")
+	}
+
+	// Force stale idle conditions and wait well past the idle timeout.
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now().Add(-100 * time.Millisecond)
+	gw.activeMu.Unlock()
+	time.Sleep(200 * time.Millisecond)
+
+	ctrl.mu.Lock()
+	calls := ctrl.powerOffCalls
+	ctrl.mu.Unlock()
+	if calls != 0 {
+		t.Errorf("expected no PowerOff while the toggle is disabled, got %d", calls)
+	}
+	if remaining := gw.IdleRemaining(); remaining != 0 {
+		t.Errorf("expected IdleRemaining() to be 0 while the toggle is disabled, got %v", remaining)
+	}
+}
+
+func TestAutoStart_UnaffectedByToggleDisabled(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{}`))
+	}))
+	defer backend.Close()
+
+	ctrl := newFakeController()
+	ctrl.setState(state.Off, nil)
+
+	gw, err := NewGateway(backend.URL, 50*time.Millisecond, 2*time.Second, ctrl, slog.Default())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if !gw.SetIdleShutdownEnabled(false) {
+		t.Fatal("expected SetIdleShutdownEnabled(false) to return true")
+	}
+
+	// The toggle governs shutdown only: an inference request arriving while
+	// the toggle is disabled must still auto-start the backend.
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	gw.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 (auto-start despite disabled toggle), got %d: %s", rec.Code, rec.Body.String())
+	}
+	ctrl.mu.Lock()
+	calls := ctrl.ensureReadyCalls
+	ctrl.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("expected EnsureReady to be called once, got %d", calls)
+	}
+}
+
+func TestIdleShutdown_ToggleReenableRestartsCountdown(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 60*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.StartIdleWatcher(context.Background())
+	defer gw.StopIdleWatcher()
+
+	time.Sleep(30 * time.Millisecond) // let the watcher initialize
+
+	// Disable and let time pass longer than the idle timeout; no shutdown.
+	if !gw.SetIdleShutdownEnabled(false) {
+		t.Fatal("expected SetIdleShutdownEnabled(false) to return true")
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	ctrl.mu.Lock()
+	callsWhileDisabled := ctrl.powerOffCalls
+	ctrl.mu.Unlock()
+	if callsWhileDisabled != 0 {
+		t.Fatalf("expected no PowerOff while the toggle is disabled, got %d", callsWhileDisabled)
+	}
+
+	// Re-enable: the countdown must restart from zero, not resume immediately.
+	if !gw.SetIdleShutdownEnabled(true) {
+		t.Fatal("expected SetIdleShutdownEnabled(true) to return true")
+	}
+
+	// IdleRemaining restarts from near idleTimeout (0.06s), not from the
+	// stale already-elapsed idle time.
+	const idleTimeoutSecs = 0.06
+	if got := gw.IdleRemaining(); got <= 0 || got > idleTimeoutSecs+1e-9 {
+		t.Errorf("expected IdleRemaining to restart from near idleTimeout, got %v", got)
+	}
+
+	time.Sleep(30 * time.Millisecond) // less than the idle timeout
+	ctrl.mu.Lock()
+	callsEarly := ctrl.powerOffCalls
+	ctrl.mu.Unlock()
+	if callsEarly != 0 {
+		t.Fatalf("expected no PowerOff shortly after re-enable (countdown restarted), got %d", callsEarly)
+	}
+
+	time.Sleep(150 * time.Millisecond) // now past a full idle timeout
+	ctrl.mu.Lock()
+	callsAfter := ctrl.powerOffCalls
+	ctrl.mu.Unlock()
+	if callsAfter == 0 {
+		t.Error("expected PowerOff after a full idle timeout following re-enable")
+	}
+}
+
+// TestSetIdleShutdownEnabled_ReenableClearsPendingShutdown is a regression
+// test for a disable -> enable that happens within a single poll interval
+// (no tick in between): the Phase-1 reservation made before the disable must
+// not survive the re-enable, or the next tick would go straight to Phase 2
+// and shut down immediately instead of restarting the countdown from zero.
+func TestSetIdleShutdownEnabled_ReenableClearsPendingShutdown(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 100*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	// Prime the state as if the watcher had just reserved a Phase-1
+	// shutdown, with no tick running.
+	gw.activeMu.Lock()
+	gw.pendingShutdown = true
+	gw.lastActivity = time.Now().Add(-time.Minute)
+	gw.activeMu.Unlock()
+
+	// Disable and immediately re-enable, with no tick in between.
+	if !gw.SetIdleShutdownEnabled(false) {
+		t.Fatal("expected SetIdleShutdownEnabled(false) to return true")
+	}
+	if !gw.SetIdleShutdownEnabled(true) {
+		t.Fatal("expected SetIdleShutdownEnabled(true) to return true")
+	}
+
+	// The reservation must be cleared and the countdown restarted from
+	// zero, so the next tick can reach neither Phase 1 (idle not yet
+	// elapsed) nor Phase 2 (nothing pending).
+	if got := gw.IdleRemaining(); got <= 0 || got > 0.1+1e-9 {
+		t.Errorf("expected IdleRemaining to restart from near the 100ms timeout, got %v", got)
+	}
+
+	gw.StartIdleWatcher(context.Background())
+	defer gw.StopIdleWatcher()
+	time.Sleep(30 * time.Millisecond) // a few ticks, still under the idle timeout
+	ctrl.mu.Lock()
+	calls := ctrl.powerOffCalls
+	ctrl.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("expected no PowerOff after sub-tick disable -> re-enable, got %d", calls)
+	}
+}
+
+func TestIdleShutdownToggle_RearmOnEgpuStart(t *testing.T) {
+	ctrl := newFakeController()
+	ctrl.setState(state.Off, nil)
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 50*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.StartIdleWatcher(context.Background())
+	defer gw.StopIdleWatcher()
+
+	time.Sleep(30 * time.Millisecond) // let the watcher observe the Off state
+
+	if !gw.SetIdleShutdownEnabled(false) {
+		t.Fatal("expected SetIdleShutdownEnabled(false) to return true")
+	}
+	if gw.IdleShutdownEnabled() {
+		t.Fatal("expected the toggle to be disabled")
+	}
+
+	// eGPU starts (Off -> Ready): the watcher must re-arm the toggle.
+	ctrl.setState(state.Ready, nil)
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && !gw.IdleShutdownEnabled() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !gw.IdleShutdownEnabled() {
+		t.Error("expected the toggle to be re-armed to enabled after eGPU start (Off->Ready)")
+	}
+}
+
+func TestIdleRemaining_ZeroWhenToggleDisabled(t *testing.T) {
+	ctrl := newFakeController()
+	gw, err := NewGatewayWithPollInterval(
+		"http://localhost:99999", 500*time.Millisecond, 2*time.Second,
+		10*time.Millisecond, ctrl, slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	gw.activeMu.Lock()
+	gw.lastActivity = time.Now()
+	gw.activeMu.Unlock()
+
+	if got := gw.IdleRemaining(); got <= 0 {
+		t.Fatalf("expected IdleRemaining > 0 while enabled, got %f", got)
+	}
+
+	if !gw.SetIdleShutdownEnabled(false) {
+		t.Fatal("expected SetIdleShutdownEnabled(false) to return true")
+	}
+	if got := gw.IdleRemaining(); got != 0 {
+		t.Errorf("expected IdleRemaining == 0 while the toggle is disabled, got %f", got)
+	}
+
+	if !gw.SetIdleShutdownEnabled(true) {
+		t.Fatal("expected SetIdleShutdownEnabled(true) to return true")
+	}
+	if got := gw.IdleRemaining(); got <= 0 {
+		t.Errorf("expected IdleRemaining > 0 after re-enable (countdown restarted), got %f", got)
+	}
+}
+
 func TestIdleShutdown_ClearedByRequest(t *testing.T) {
 	ctrl := newFakeController()
 	gw, err := NewGatewayWithPollInterval(

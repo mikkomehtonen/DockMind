@@ -42,7 +42,8 @@ State machine concurrency: `transitionMu` is acquired with `TryLock()` and held 
 ## Testing conventions
 
 - Stdlib only. No testify or mocking libraries — fakes are hand-written in each `_test.go`.
-- Table-driven tests are the norm.
+- Table-driven tests are the norm. Extend an existing table-driven test for a new case rather than adding a parallel test function that re-covers the same concern — code review flags the duplication.
+- `cmd/dockmind/main.go` wiring is verified behaviorally through the seams (real `Gateway`/clients against an `httptest` backend + interface fakes, asserting endpoint status and `/status` reflection) — code review rejects source-text-scan tests of `main.go`.
 - `shelly`/`health`: test via `httptest.NewServer`.
 - `gpu`/`docker`: test by injecting a fake `execFunc`.
 - `state`: inject fakes for all four interfaces; call `m.Wait()` before asserting final state.

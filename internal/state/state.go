@@ -130,20 +130,22 @@ type ModelUnloader interface {
 }
 
 type StatusResponse struct {
-	State               string               `json:"state"`
-	GPUPresent          bool                 `json:"gpuPresent"`
-	GPUName             string               `json:"gpuName"`
-	ShellyOn            bool                 `json:"shellyOn"`
-	LlamaSwapRunning    bool                 `json:"llamaSwapRunning"`
-	LlamaSwapHealthy    bool                 `json:"llamaSwapHealthy"`
-	LoadedModels        []string             `json:"loadedModels"`
-	GPUProcesses        []GPUProcess         `json:"gpuProcesses"`
-	GPUMemory           GPUMemory            `json:"gpuMemory"`
-	LastError           *string              `json:"lastError"`
-	CooldownRemaining   float64              `json:"cooldownRemaining"`
-	IdleRemaining       float64              `json:"idleRemaining"`
-	IdleShutdownBlocked bool                 `json:"idleShutdownBlocked"`
-	AuxContainers       []AuxContainerStatus `json:"auxContainers"`
+	State                 string               `json:"state"`
+	GPUPresent            bool                 `json:"gpuPresent"`
+	GPUName               string               `json:"gpuName"`
+	ShellyOn              bool                 `json:"shellyOn"`
+	LlamaSwapRunning      bool                 `json:"llamaSwapRunning"`
+	LlamaSwapHealthy      bool                 `json:"llamaSwapHealthy"`
+	LoadedModels          []string             `json:"loadedModels"`
+	GPUProcesses          []GPUProcess         `json:"gpuProcesses"`
+	GPUMemory             GPUMemory            `json:"gpuMemory"`
+	LastError             *string              `json:"lastError"`
+	CooldownRemaining     float64              `json:"cooldownRemaining"`
+	IdleRemaining         float64              `json:"idleRemaining"`
+	IdleShutdownEnabled   bool                 `json:"idleShutdownEnabled"`
+	IdleShutdownAvailable bool                 `json:"idleShutdownAvailable"`
+	IdleShutdownBlocked   bool                 `json:"idleShutdownBlocked"`
+	AuxContainers         []AuxContainerStatus `json:"auxContainers"`
 }
 
 type Machine struct {

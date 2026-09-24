@@ -115,6 +115,10 @@ type Gateway struct {
 	// idleBlocked is set when aux containers with DisableIdleShutdown are running.
 	idleBlocked atomic.Bool
 
+	// idleShutdownEnabled is the runtime toggle for idle auto-shutdown.
+	// Defaults to true and re-arms to true on every eGPU start (Off→Ready).
+	idleShutdownEnabled atomic.Bool
+
 	// Idle watcher lifecycle.
 	idleCtx    context.Context
 	idleCancel context.CancelFunc
@@ -148,6 +152,9 @@ func NewGateway(backendURL string, idleTimeout, requestTimeout time.Duration, ma
 		},
 	}
 
+	// Idle auto-shutdown is enabled by default (and for any idleTimeout).
+	gw.idleShutdownEnabled.Store(true)
+
 	return gw, nil
 }
 
@@ -180,11 +187,14 @@ func (g *Gateway) InitModelsCache(dir string) {
 }
 
 // IdleRemaining returns the number of seconds before an idle auto-shutdown,
-// or 0 when no shutdown is pending or when idle shutdown is blocked by aux
-// containers. It is safe to call concurrently with the idle watcher and
-// request handlers.
+// or 0 when no shutdown is pending, when the runtime idle-shutdown toggle is
+// disabled, or when idle shutdown is blocked by aux containers. It is safe to
+// call concurrently with the idle watcher and request handlers.
 func (g *Gateway) IdleRemaining() float64 {
 	if g.idleTimeout <= 0 {
+		return 0
+	}
+	if !g.idleShutdownEnabled.Load() {
 		return 0
 	}
 	if g.idleBlocked.Load() {
@@ -219,6 +229,45 @@ func (g *Gateway) IdleShutdownBlocked() bool {
 		return false
 	}
 	return g.idleBlocked.Load()
+}
+
+// IdleShutdownEnabled reports whether the runtime idle auto-shutdown toggle
+// is currently enabled.
+func (g *Gateway) IdleShutdownEnabled() bool {
+	return g.idleShutdownEnabled.Load()
+}
+
+// IdleShutdownAvailable reports whether the idle auto-shutdown toggle is
+// meaningful, i.e. the gateway has a configured idle timeout (idleTimeout > 0).
+func (g *Gateway) IdleShutdownAvailable() bool {
+	return g.idleTimeout > 0
+}
+
+// SetIdleShutdownEnabled sets the runtime idle auto-shutdown toggle.
+// It returns false when there is no idle timeout configured (not applicable,
+// so the call is rejected). When re-enabling (false -> true) the idle
+// countdown is restarted from zero so it does not resume from a stale value.
+func (g *Gateway) SetIdleShutdownEnabled(enabled bool) bool {
+	if g.idleTimeout <= 0 {
+		return false
+	}
+	if enabled {
+		if g.idleShutdownEnabled.Load() {
+			return true // already enabled: idempotent no-op, no reset
+		}
+		// Reset the countdown state before flipping the toggle, so a
+		// concurrent tick can never observe enabled=true with a stale
+		// lastActivity or a pending Phase-1 reservation: a tick that sees
+		// the new value takes activeMu only after this critical section.
+		g.activeMu.Lock()
+		g.lastActivity = time.Now()
+		g.pendingShutdown = false
+		g.activeMu.Unlock()
+		g.idleShutdownEnabled.Store(true)
+	} else {
+		g.idleShutdownEnabled.Store(false)
+	}
+	return true
 }
 
 // StartIdleWatcher starts the background idle shutdown goroutine.
@@ -344,6 +393,7 @@ func (g *Gateway) tick(prevReady bool) {
 		g.pendingShutdown = false
 		g.activeMu.Unlock()
 		g.idleBlocked.Store(false)
+		g.idleShutdownEnabled.Store(true)
 		return
 	}
 
@@ -376,6 +426,17 @@ func (g *Gateway) tick(prevReady bool) {
 		g.lastActivity = time.Now()
 		g.activeMu.Unlock()
 		g.logger.Info("idle shutdown unblocked, aux containers stopped")
+	}
+
+	// Idle auto-shutdown disabled by the runtime toggle: hold the eGPU up.
+	// Reset the activity timer each tick so idle time does not accrue;
+	// re-enabling restarts the countdown from zero.
+	if !g.idleShutdownEnabled.Load() {
+		g.activeMu.Lock()
+		g.pendingShutdown = false
+		g.lastActivity = time.Now()
+		g.activeMu.Unlock()
+		return
 	}
 
 	g.activeMu.Lock()

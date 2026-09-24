@@ -208,6 +208,49 @@
       color: var(--primary);
     }
 
+    .state__idle-off {
+      color: var(--busy);
+    }
+
+    .state__idle-toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.375rem;
+    }
+
+    .idle-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: var(--fs-sm);
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .idle-toggle__box {
+      width: 1.125rem;
+      height: 1.125rem;
+      margin: 0;
+      accent-color: var(--primary);
+      cursor: inherit;
+    }
+
+    .idle-toggle__box:disabled {
+      cursor: not-allowed;
+    }
+
+    .idle-toggle__label {
+      line-height: 1;
+    }
+
+    .idle-toggle__hint {
+      font-size: var(--fs-sm);
+      color: var(--muted);
+      opacity: 0.7;
+    }
+
     .actions {
       display: flex;
       flex-direction: column;
@@ -555,6 +598,14 @@
         <p class="state__cooldown" id="cooldown" hidden>Cooldown active — <span id="cooldown-time">0</span>s remaining</p>
         <p class="state__idle" id="idle" hidden>Auto-shutdown in <span id="idle-time">0</span></p>
         <p class="state__idle state__idle-paused" id="idle-paused" hidden>Auto-shutdown paused</p>
+        <p class="state__idle state__idle-off" id="idle-off" hidden>Idle auto-shutdown off</p>
+        <div class="state__idle-toggle">
+          <label class="idle-toggle">
+            <input type="checkbox" class="idle-toggle__box" id="idle-shutdown-toggle" />
+            <span class="idle-toggle__label">Automatic idle shutdown</span>
+          </label>
+          <span class="idle-toggle__hint" id="idle-shutdown-hint" hidden>n/a</span>
+        </div>
       </div>
     </section>
 
@@ -669,6 +720,9 @@
       idle: document.getElementById("idle"),
       idleTime: document.getElementById("idle-time"),
       idlePaused: document.getElementById("idle-paused"),
+      idleOff: document.getElementById("idle-off"),
+      idleToggle: document.getElementById("idle-shutdown-toggle"),
+      idleToggleHint: document.getElementById("idle-shutdown-hint"),
     };
 
     let pending = false;
@@ -884,16 +938,34 @@
         els.btnRestart.disabled = !enabled.restart;
       }
 
-      if (data.idleShutdownBlocked) {
+      // Idle auto-shutdown toggle control (always visible).
+      els.idleToggle.checked = !!data.idleShutdownEnabled;
+      els.idleToggle.disabled = !data.idleShutdownAvailable;
+      els.idleToggleHint.hidden = !!data.idleShutdownAvailable;
+
+      if (!data.idleShutdownAvailable) {
+        // No gateway idle timeout configured: nothing to display.
+        els.idle.hidden = true;
+        els.idlePaused.hidden = true;
+        els.idleOff.hidden = true;
+      } else if (data.idleShutdownBlocked) {
         els.idle.hidden = true;
         els.idlePaused.hidden = false;
+        els.idleOff.hidden = true;
+      } else if (!data.idleShutdownEnabled) {
+        // Toggle off: hold the eGPU up, no countdown running.
+        els.idle.hidden = true;
+        els.idlePaused.hidden = true;
+        els.idleOff.hidden = false;
       } else if (data.idleRemaining > 0) {
         els.idle.hidden = false;
         els.idleTime.textContent = formatIdleRemaining(data.idleRemaining);
         els.idlePaused.hidden = true;
+        els.idleOff.hidden = true;
       } else {
         els.idle.hidden = true;
         els.idlePaused.hidden = true;
+        els.idleOff.hidden = true;
       }
 
       showFeedback("");
@@ -961,11 +1033,31 @@
       setTimeout(fetchStatus, 1000);
     }
 
+    async function doIdleToggle(enabled) {
+      const endpoint = enabled ? "/idle-shutdown/enable" : "/idle-shutdown/disable";
+      const label = enabled ? "Enabling auto-shutdown" : "Disabling auto-shutdown";
+      showFeedback(label + "…");
+      try {
+        const res = await fetch(endpoint, { method: "POST" });
+        if (res.status === 200)      showFeedback(label + " done");
+        else if (res.status === 409) showFeedback("Idle auto-shutdown not available");
+        else                         showFeedback("Unexpected response");
+      } catch (e) {
+        showFeedback("Request failed");
+      }
+      setTimeout(fetchStatus, 1000);
+    }
+
     [els.btnOn, els.btnOff, els.btnRestart].forEach(btn => {
       btn.addEventListener("click", () => {
         const action = btn.dataset.action;
         doAction(ACTION_ENDPOINTS[action], ACTION_LABELS[action]);
       });
+    });
+
+    els.idleToggle.addEventListener("change", () => {
+      if (els.idleToggle.disabled) return;
+      doIdleToggle(els.idleToggle.checked);
     });
 
     setInterval(fetchStatus, POLL_MS);

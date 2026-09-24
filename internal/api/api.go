@@ -40,13 +40,23 @@ type IdleReporter interface {
 	IdleShutdownBlocked() bool
 }
 
+// IdleShutdownController exposes and controls the runtime idle auto-shutdown
+// toggle. SetIdleShutdownEnabled returns false when there is no gateway idle
+// timeout configured (not applicable, so the call is rejected).
+type IdleShutdownController interface {
+	IdleShutdownEnabled() bool
+	IdleShutdownAvailable() bool
+	SetIdleShutdownEnabled(enabled bool) bool
+}
+
 type Server struct {
-	machine           StateMachine
-	logger            *slog.Logger
-	indexHTMLRendered []byte
-	gatewayHandler    http.Handler // nil = gateway disabled
-	modelsHandler     http.Handler // nil = gateway disabled
-	idleReporter      IdleReporter // nil = no idle reporter wired
+	machine                StateMachine
+	logger                 *slog.Logger
+	indexHTMLRendered      []byte
+	gatewayHandler         http.Handler           // nil = gateway disabled
+	modelsHandler          http.Handler           // nil = gateway disabled
+	idleReporter           IdleReporter           // nil = no idle reporter wired
+	idleShutdownController IdleShutdownController // nil = toggle not available
 }
 
 func NewServer(machine StateMachine, logger *slog.Logger) *Server {
@@ -82,12 +92,20 @@ func (s *Server) SetIdleReporter(r IdleReporter) {
 	s.idleReporter = r
 }
 
+// SetIdleShutdownController wires the runtime idle auto-shutdown toggle.
+// Passing nil (or never calling this) makes the toggle endpoints return 409.
+func (s *Server) SetIdleShutdownController(c IdleShutdownController) {
+	s.idleShutdownController = c
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("POST /power/on", s.handlePowerOn)
 	mux.HandleFunc("POST /power/off", s.handlePowerOff)
 	mux.HandleFunc("POST /restart", s.handleRestart)
+	mux.HandleFunc("POST /idle-shutdown/enable", s.handleIdleShutdownEnable)
+	mux.HandleFunc("POST /idle-shutdown/disable", s.handleIdleShutdownDisable)
 	mux.HandleFunc("POST /containers/{name}/start", s.handleStartAuxContainer)
 	mux.HandleFunc("POST /containers/{name}/stop", s.handleStopAuxContainer)
 	mux.HandleFunc("GET /health", s.handleHealth)
@@ -109,6 +127,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if s.idleReporter != nil {
 		status.IdleRemaining = s.idleReporter.IdleRemaining()
 		status.IdleShutdownBlocked = s.idleReporter.IdleShutdownBlocked()
+	}
+	if s.idleShutdownController != nil {
+		status.IdleShutdownEnabled = s.idleShutdownController.IdleShutdownEnabled()
+		status.IdleShutdownAvailable = s.idleShutdownController.IdleShutdownAvailable()
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -142,6 +164,27 @@ func (s *Server) handlePowerResult(w http.ResponseWriter, result state.PowerResu
 	default:
 		w.WriteHeader(http.StatusInternalServerError)
 	}
+}
+
+func (s *Server) handleIdleShutdownEnable(w http.ResponseWriter, r *http.Request) {
+	s.handleIdleShutdown(w, true)
+}
+
+func (s *Server) handleIdleShutdownDisable(w http.ResponseWriter, r *http.Request) {
+	s.handleIdleShutdown(w, false)
+}
+
+// handleIdleShutdown sets the runtime idle auto-shutdown toggle. It returns
+// 409 when no toggle is wired or there is no gateway idle timeout (so there
+// is nothing to enable/disable); otherwise 200 with an empty body. The
+// endpoints are idempotent — setting the already-active state still returns
+// 200.
+func (s *Server) handleIdleShutdown(w http.ResponseWriter, enabled bool) {
+	if s.idleShutdownController == nil || !s.idleShutdownController.SetIdleShutdownEnabled(enabled) {
+		w.WriteHeader(http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleStartAuxContainer(w http.ResponseWriter, r *http.Request) {

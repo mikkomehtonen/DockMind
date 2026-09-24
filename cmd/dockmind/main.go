@@ -99,8 +99,7 @@ func main() {
 			os.Exit(1)
 		}
 		gw.InitModelsCache(cfg.Gateway.ModelsCacheDir)
-		server.SetGatewayHandlers(gw.Handler(), gw.ModelsHandler())
-		server.SetIdleReporter(gw)
+		wireGateway(server, gw)
 		gw.SetModelsRefreshInterval(cfg.Gateway.ModelsRefreshInterval.Duration())
 		gw.StartModelsRefresher(context.Background())
 		gw.StartIdleWatcher(context.Background())
@@ -145,4 +144,13 @@ func newLactClient(cfg *config.Config) *lact.Client {
 		return lact.New()
 	}
 	return nil
+}
+
+// wireGateway connects the API server to the gateway: the OpenAI-compatible
+// routes, live idle status reporting, and the runtime idle auto-shutdown
+// toggle. It is only called from the gateway-enabled path.
+func wireGateway(server *api.Server, gw *gateway.Gateway) {
+	server.SetGatewayHandlers(gw.Handler(), gw.ModelsHandler())
+	server.SetIdleReporter(gw)
+	server.SetIdleShutdownController(gw)
 }

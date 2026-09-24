@@ -3317,6 +3317,35 @@ func TestStatusAuxDisableIdleShutdown(t *testing.T) {
 	}
 }
 
+func TestStatusIdleShutdownToggleFields(t *testing.T) {
+	m, _, _, _, _, _, _ := newTestMachineWithRecorder()
+	m.state = Ready
+
+	status := m.Status()
+
+	// The toggle fields are gateway-owned; Status() leaves them at their zero
+	// values. They are populated by the API handler from the idle reporter,
+	// just like IdleRemaining and IdleShutdownBlocked.
+	if status.IdleShutdownEnabled {
+		t.Fatal("expected IdleShutdownEnabled=false from Status() (set by API handler, not Status)")
+	}
+	if status.IdleShutdownAvailable {
+		t.Fatal("expected IdleShutdownAvailable=false from Status() (set by API handler, not Status)")
+	}
+
+	// Ensure the JSON contract exposes both fields.
+	body, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("failed to marshal StatusResponse: %v", err)
+	}
+	if !strings.Contains(string(body), `"idleShutdownEnabled":false`) {
+		t.Fatalf("expected JSON to contain \"idleShutdownEnabled\":false, got %s", body)
+	}
+	if !strings.Contains(string(body), `"idleShutdownAvailable":false`) {
+		t.Fatalf("expected JSON to contain \"idleShutdownAvailable\":false, got %s", body)
+	}
+}
+
 func TestStatusAuxUnloadLlamaSwap(t *testing.T) {
 	m, _, _, _, _, _ := newTestMachine()
 	aux := &fakeAuxController{
