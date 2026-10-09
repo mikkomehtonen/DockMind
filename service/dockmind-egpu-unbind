@@ -19,7 +19,10 @@ readonly LOCK_FILE="/run/lock/dockmind-egpu-unbind.lock"
 readonly EXPECTED_VENDOR="0x10de"
 
 # RTX 5070 ti
-readonly EXPECTED_DEVICE="0x2c05"
+#readonly EXPECTED_DEVICE="0x2c05"
+
+# GTX 1080
+readonly EXPECTED_DEVICE="0x1b80"
 
 # PCI base classes.
 readonly DISPLAY_CLASS_PREFIX="0x03"
