@@ -21,8 +21,11 @@ readonly EXPECTED_VENDOR="0x10de"
 # RTX 5070 ti
 #readonly EXPECTED_DEVICE="0x2c05"
 
+# RTX 5060 ti
+readonly EXPECTED_DEVICE="0x2d04"
+
 # GTX 1080
-readonly EXPECTED_DEVICE="0x1b80"
+#readonly EXPECTED_DEVICE="0x1b80"
 
 # PCI base classes.
 readonly DISPLAY_CLASS_PREFIX="0x03"
